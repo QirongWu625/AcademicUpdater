@@ -1,0 +1,3 @@
+# Core application uses the Python standard library.
+# Required for cryptographic verification of ChatGPT sign-in ID tokens.
+cryptography>=44.0

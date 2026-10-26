@@ -1,0 +1,26 @@
+name: Feature request / 功能建议
+description: Suggest a feature or improvement / 提出新功能或改进
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What research workflow should improve? / 希望改善哪种研究工作流程？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior / 建议的功能与行为
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or examples / 替代方案或示例
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution / 参与贡献
+      options:
+        - label: I would like to help implement or test this. / 我愿意协助实现或测试。

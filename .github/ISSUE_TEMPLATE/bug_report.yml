@@ -1,0 +1,33 @@
+name: Bug report / 问题反馈
+description: Report a reproducible problem / 报告可复现的问题
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Please remove tokens, personal research, notes and account details. 请勿上传令牌、私人研究内容、笔记或账号信息。"
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened? / 出现了什么问题？
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / 复现步骤
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior / 期望行为
+  - type: input
+    id: environment
+    attributes:
+      label: App version, OS, Python version / 应用版本、系统与 Python 版本
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Sanitized error or screenshot / 已去除私人信息的错误或截图

@@ -1,0 +1,121 @@
+<p align="center"><img src="static/logo.png" alt="AcademicUpdater logo" width="112"></p>
+
+# AcademicUpdater
+
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+在自己电脑上运行的 AI 研究更新工具与个人资料库。持续跟踪论文、行业动态和会议报告，先确认 AI 对研究方向的理解，再逐步建立可检索、可导出的资料集合，减少重复导入。
+
+**版本 1.3.0 · MIT 许可证 · 欢迎贡献**
+
+## 界面演示
+
+下图来自**真实运行的应用**，使用隔离的虚构示例数据。标题、作者、引用数与分析仅供演示，不包含个人资料库或账号信息。
+
+![今日更新：按相关性排列研究动态](docs/images/today-zh.png)
+
+<details>
+<summary>研究发展史：保存的精选论文与引用时间线</summary>
+
+![研究发展史：高影响力与奠基性候选](docs/images/history-zh.png)
+
+</details>
+
+[提出功能建议](https://github.com/QirongWu625/AcademicUpdater/issues/new?template=feature_request.yml) · [反馈问题](https://github.com/QirongWu625/AcademicUpdater/issues/new?template=bug_report.yml) · [参与 Pull Request](CONTRIBUTING.md)
+
+## 已实现的功能
+
+- **今日更新：**从 Crossref、arXiv 和公开 RSS/Atom 获取内容，按相关性排列已分析条目，用颜色和文字共同标识。
+- **研究范围：**用提示词描述兴趣，检查并修改 AI 理解的中英文领域、关键词、排除项及检索词，再应用到日常采集。
+- **资料库：**保存作者、期刊、笔记、阅读状态、收藏及来源版本。筛选立即生效，可按日期、标题、第一作者姓氏、期刊、相关性及影响因子排序。
+- **研究发展史：**保存独立历史检索，优先寻找高影响力及奠基性候选，从入选论文生成带引用的时间线；结果可重新打开、筛选和导出。
+- **期刊指标：**手动录入或导入带年份及来源的 IF。缺失值保留为缺失；不附带商业期刊指标数据库。
+- **AI 连接：**支持具备相应资格的 ChatGPT 登录、OpenAI API 和兼容的本机模型服务，可选择模型及其支持的推理强度。
+- **持久化与恢复：**SQLite 存储、基于标识符的去重、备份、导出、逐篇保存、暂停与继续、中断恢复。
+- **中英文界面：**界面和摘要语言分别设置；研究范围、来源与计划、AI 连接统一放在个人中心。
+
+## 安装与启动
+
+需要 **Python 3.11 或更新版本**。Windows 是主要桌面平台。核心应用也可在 macOS/Linux 运行；目前保存凭据使用 Windows DPAPI 加密，其他平台请使用环境变量中的 API 密钥或兼容的本机模型。
+
+下载源码或克隆仓库，在项目文件夹中打开终端。
+
+### Windows
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python run.py --open
+```
+
+安装依赖后，也可双击 `Start.cmd`。启动器优先使用项目中的 `.venv`，并在后台运行应用。双击 `Stop.cmd` 停止后台实例；关闭浏览器不会停止服务。
+
+### macOS / Linux
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python run.py --open
+```
+
+访问 **http://127.0.0.1:8765/**。前台运行时可按 Ctrl+C 停止。服务仅监听本机，面向个人使用。
+
+## 首次使用
+
+1. 在 **个人中心 → AI 连接** 选择服务，完成连接，加载模型并选择支持的推理强度。ChatGPT 订阅不包含 OpenAI API 费用；登录接入取决于账号资格与服务方支持，应用不会自动切换到付费 API。
+2. 在 **研究范围** 输入提示词，检查解释出的领域和检索词，再应用设置。也可以不使用 AI，手动填写领域与检索词。
+3. 在 **来源与计划** 设置论文来源，以及所需行业或会议的 RSS 订阅，开始采集并查看今日更新。
+4. 在 **研究发展史** 创建独立的历史检索，不必改变日常范围。建议先用较小上限检查检索词质量，再扩大采集。
+
+运行后可打开应用内的[双语指南](http://127.0.0.1:8765/guide)。
+
+若使用环境变量密钥，在启动应用的环境中设置 `OPENAI_API_KEY`，并选择 API 服务。不要把密钥写进源码。本机模型服务需兼容应用使用的 OpenAI chat-completions 请求及结构化回答。
+
+## 历史论文如何筛选
+
+新检索默认启用精选模式。Crossref 结合引用量排序与相关性排序获取候选；论文先满足相关性，再达到可调引用门槛（默认 100），或具有摘要依据支持的奠基性贡献。默认列表与时间线仅使用入选论文，其他候选保留供核查。引用数附带来源及查询时间，奠基性标签为需专业核查的候选判断；旧检索不会被覆盖。详见 [筛选规则](docs/RESEARCH_HISTORY.md)。
+
+## 数据与升级
+
+- `data/academicupdater.sqlite3`：资料、设置、研究范围、笔记、分析和历史检索。
+- `data/backups/`：采集前数据库备份，每个 UTC 日期至多一份。
+- `data/credentials.dpapi`：与当前 Windows 用户绑定的加密凭据，不包含在资料导出中。
+- JSONL/CSV 用于交换资料；完整恢复应用状态应使用 SQLite 数据库备份。
+
+升级前先停止应用，备份完整的 `data/` 文件夹。替换源码时保留 `data/`，再重新启动。数据库迁移会保留旧论文、收藏、笔记和分析。换电脑或系统账号后，加密凭据可能无法解密，需要重新连接。不要让两个版本同时使用同一数据库。
+
+意外中断的采集或分析会在启动后恢复。手动暂停、达到额度上限的任务需点击 **继续**。强制退出前尚未保存的请求可能重试；已保存结果有检查点。
+
+公开仓库不包含个人资料库、凭据及运行日志。开发或试验时使用独立数据目录：
+
+```sh
+python run.py --port 8766 --data-dir ./work/dev-data --no-scheduler
+```
+
+## 覆盖范围与限制
+
+- 定时采集要求应用运行且电脑唤醒。默认 08:00、固定 UTC+10，可自行修改时间与偏移量；不会安装系统开机任务。
+- AI 根据标题和摘要／描述分析，并非阅读全文。相关性及时间线需要人工核查，不能证明某篇工作是历史上的“首次”。
+- “全部匹配”指给定检索词下来源允许取得的结果，不代表领域内全部文献。宽泛检索可能产生低相关结果，界面会显示上限及错误。发展概述最多使用按年份选取的 80 篇相关论文，全部候选与逐篇分析仍然保存。
+- 相同 DOI、arXiv 编号、来源编号或规范链接可合并；只有标题相似的记录不会自动合并。
+- IF 为用户提供、带年份的指标。预印本等不适用的资料类型不会被推测赋值。
+- 这是本机个人应用。若要作为公开的多人服务部署，需要另行设计和审查身份验证及部署方案。
+
+## 参与贡献
+
+欢迎功能建议、问题反馈、翻译、文档和 Pull Request；可使用中文或英文。请先阅读 [贡献指南](CONTRIBUTING.md)。
+
+适合参与的方向包括新来源接入、历史检索质量、跨平台凭据保存、无障碍支持以及导入导出互通。涉及较大架构调整时，请先通过 Issue 讨论。
+
+```sh
+python -m pip install -r requirements.txt
+python -m unittest discover -s tests -v
+python scripts/check_public_tree.py
+node --check static/app.js
+node --check static/history.js
+node --check static/i18n.js
+```
+
+Node.js 只用于 JavaScript 语法检查，运行应用不需要。测试使用隔离的临时数据库和模拟服务响应，不需要个人 AI 凭据。GitHub Actions 已配置 Windows/Ubuntu、Python 3.11/3.13 的测试与语法检查。
+
+另见 [架构说明](docs/ARCHITECTURE.md)、[更新记录](CHANGELOG.md) 和 [安全说明](SECURITY.md)。代码采用 [MIT 许可证](LICENSE)；第三方内容和服务仍受其各自条款约束。
