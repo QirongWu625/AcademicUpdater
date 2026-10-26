@@ -72,9 +72,9 @@ def make_server(app,port):
                 parsed=urllib.parse.urlsplit(self.path);path=parsed.path;q={k:v[0] for k,v in urllib.parse.parse_qs(parsed.query).items()}
                 if path=='/api/health':return self.json({'app':'AcademicUpdater','version':__version__})
                 if path=='/api/bootstrap':return self.json(app.bootstrap())
-                if path=='/api/items':return self.json(app.store.items(q.get('q','')[:300],q.get('kind',''),q.get('saved')=='1',sort=q.get('sort','updated'),direction=q.get('direction'),daily=q.get('today')=='1'))
+                if path=='/api/items':return self.json(app.store.items(q.get('q','')[:300],q.get('kind',''),q.get('saved')=='1',sort=q.get('sort','updated'),direction=q.get('direction'),daily=q.get('today')=='1',deleted=q.get('deleted')=='1' and q.get('today')!='1'))
                 if path=='/api/model-capabilities':return self.json(app.ai.capabilities({**app.store.settings(),'model':q.get('model',app.store.settings()['model'])}))
-                if path=='/api/histories':return self.json(app.service.history.list())
+                if path=='/api/histories':return self.json(app.service.history.list(deleted=q.get('deleted')=='1'))
                 history_route=re.fullmatch(r'/api/histories/(\d+)(?:/(export|papers))?',path)
                 if history_route:
                     hid=int(history_route[1]);h=app.service.history
@@ -91,7 +91,7 @@ def make_server(app,port):
                     with app.store.db() as c:row=c.execute('SELECT * FROM digests ORDER BY day DESC LIMIT 1').fetchone()
                     return self.json({'day':row['day'],'ids':json.loads(row['item_ids'])} if row else {'day':None,'ids':[]})
                 if path=='/api/export':
-                    with app.store.db() as c:ids=[r[0] for r in c.execute('SELECT id FROM items ORDER BY id')]
+                    with app.store.db() as c:ids=[r[0] for r in c.execute('SELECT id FROM items WHERE deleted_at IS NULL ORDER BY id')]
                     if q.get('format')=='csv':
                         output=io.StringIO();writer=csv.writer(output);writer.writerow(['id','type','title','url','published_at','authors','journal','issns','impact_factor','if_year','if_source','if_source_url','saved','read','notes'])
                         def safe(v):
@@ -107,7 +107,7 @@ def make_server(app,port):
                     try:enabled=app.oauth.callback(q);app.oauth.last_error='' if enabled else 'subscription_not_authorized'
                     except AppError as exc:app.oauth.last_error=exc.code
                     self.send_response(303);self.send_header('Location','/#ai');self.send_header('Content-Length','0');self.send_header('Cache-Control','no-store');self.end_headers();return
-                files={'/logo.png':'logo.png','/':'index.html','/index.html':'index.html','/app.js':'app.js','/history.js':'history.js','/i18n.js':'i18n.js','/styles.css':'styles.css','/guide':'guide.html'}
+                files={'/logo.png':'logo.png','/':'index.html','/index.html':'index.html','/app.js':'app.js','/history.js':'history.js','/trash.js':'trash.js','/i18n.js':'i18n.js','/styles.css':'styles.css','/guide':'guide.html'}
                 if path not in files:raise AppError('not_found',status=404)
                 file=static/files[path]
                 self.send(file.read_bytes(),(mimetypes.guess_type(str(file))[0] or 'text/plain')+'; charset=utf-8')
@@ -123,6 +123,8 @@ def make_server(app,port):
                 except ValueError:raise AppError('invalid_json')
                 if not isinstance(body,dict):raise AppError('invalid_json')
                 path=urllib.parse.urlsplit(self.path).path
+                deletion=re.fullmatch(r'/api/(items|histories)/(\d+)/(delete|restore)',path)
+                if deletion:return self.json(app.service.set_deleted(deletion[1],int(deletion[2]),deletion[3]=='delete'))
                 if path=='/api/histories':return self.json(app.service.history.save(body))
                 history_route=re.fullmatch(r'/api/histories/(\d+)(?:/(plan|search))?',path)
                 if history_route:

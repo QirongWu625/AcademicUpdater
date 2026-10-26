@@ -63,6 +63,9 @@ class Store:
             c.execute("UPDATE ai_usage SET status='interrupted' WHERE status='started'")
 
     def _migrate(self,c):
+        for table in ('items','histories'):
+            if 'deleted_at' not in {r['name'] for r in c.execute(f'PRAGMA table_info({table})')}:
+                c.execute(f'ALTER TABLE {table} ADD COLUMN deleted_at TEXT')
         columns={r['name'] for r in c.execute('PRAGMA table_info(items)')}
         if 'history_only' not in columns:c.execute('ALTER TABLE items ADD COLUMN history_only INTEGER NOT NULL DEFAULT 0')
         for name,definition in [('journal',"TEXT NOT NULL DEFAULT ''"),('journal_key',"TEXT NOT NULL DEFAULT ''"),('issns',"TEXT NOT NULL DEFAULT '[]'"),('venue_type',"TEXT NOT NULL DEFAULT 'unknown'"),('author_sort',"TEXT NOT NULL DEFAULT ''")]:
@@ -188,6 +191,10 @@ class Store:
                 item_id = c.execute('INSERT INTO items(kind,title,abstract,url,authors,published_at,first_seen,last_seen,updated_at) VALUES(?,?,?,?,?,?,?,?,?)', (record.get('kind','paper'),title,abstract,url,encode(authors),record.get('published_at'),stamp,stamp,stamp)).lastrowid
             else:
                 item_id = next(iter(matches))
+                if c.execute('SELECT deleted_at FROM items WHERE id=?',(item_id,)).fetchone()[0]:
+                    # Keep identity tombstones so collection cannot resurrect removed records.
+                    for key in keys:c.execute('INSERT OR IGNORE INTO identifiers VALUES(?,?)',(key,item_id))
+                    return {'id':item_id,'new':False,'updated':False,'duplicate':True,'deleted':True}
             for key in keys:
                 c.execute('INSERT OR IGNORE INTO identifiers VALUES(?,?)',(key,item_id))
             if historical and is_new:c.execute('UPDATE items SET history_only=1 WHERE id=?',(item_id,))
@@ -231,9 +238,9 @@ class Store:
                 c.execute("UPDATE items SET journal=CASE WHEN ?<>'' THEN ? ELSE journal END,journal_key=CASE WHEN ?<>'' THEN ? ELSE journal_key END,issns=CASE WHEN ?<>'[]' THEN ? ELSE issns END,venue_type=CASE WHEN ?<>'unknown' THEN ? ELSE venue_type END,author_sort=CASE WHEN ?<>'' THEN ? ELSE author_sort END WHERE id=?",(meta['journal'],meta['journal'],meta['journal_key'],meta['journal_key'],encode(meta['issns']),encode(meta['issns']),meta['venue_type'],meta['venue_type'],meta['author_sort'],meta['author_sort'],item_id))
             return {'id':item_id,'new':is_new,'updated':bool(changed and primary),'duplicate':not is_new and not changed}
 
-    def items(self, query='', kind='', saved=False, limit=300, sort='updated',direction=None,daily=False):
+    def items(self, query='', kind='', saved=False, limit=300, sort='updated',direction=None,daily=False,deleted=False):
         with self.db() as c:
-            where, params = [], []
+            where, params = ['i.deleted_at IS NOT NULL' if deleted else 'i.deleted_at IS NULL'], []
             if daily:where.append('i.history_only=0')
             if kind:
                 where.append('i.kind=?'); params.append(kind)
@@ -262,10 +269,10 @@ class Store:
             elif direction=='asc':result.reverse()
             return result[:limit] if limit else result
 
-    def item(self, item_id):
+    def item(self, item_id, include_deleted=False):
         with self.db() as c:
             row=c.execute('SELECT * FROM items WHERE id=?',(item_id,)).fetchone()
-            if not row: raise AppError('not_found',status=404)
+            if not row or (row['deleted_at'] and not include_deleted): raise AppError('not_found',status=404)
             result=dict(row);result['authors']=json.loads(result['authors']);result['issns']=json.loads(result['issns'])
             result['sources']=[dict(r) for r in c.execute('SELECT r.id,r.url,r.external_id,r.last_seen,s.name FROM source_records r LEFT JOIN sources s ON r.source_id=s.id WHERE r.item_id=?',(item_id,))]
             result['versions']=[dict(r) for r in c.execute('SELECT id,label,title,abstract,observed_at,record_id FROM versions WHERE item_id=? ORDER BY id DESC',(item_id,))]
@@ -284,7 +291,23 @@ class Store:
         return len(validated)
 
     def pending_items(self,profile_version):
-        with self.db() as c:return [dict(r) for r in c.execute('SELECT i.id,i.current_version FROM items i WHERE i.ignored=0 AND i.history_only=0 AND NOT EXISTS(SELECT 1 FROM analyses a WHERE a.item_id=i.id AND a.version_id=i.current_version AND a.profile_version=?) ORDER BY i.updated_at DESC,i.id DESC',(profile_version,))]
+        with self.db() as c:return [dict(r) for r in c.execute('SELECT i.id,i.current_version FROM items i WHERE i.deleted_at IS NULL AND i.ignored=0 AND i.history_only=0 AND NOT EXISTS(SELECT 1 FROM analyses a WHERE a.item_id=i.id AND a.version_id=i.current_version AND a.profile_version=?) ORDER BY i.updated_at DESC,i.id DESC',(profile_version,))]
+
+    def set_deleted(self,kind,record_id,deleted):
+        table={'items':'items','histories':'histories'}[kind]
+        with self.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            row=c.execute(f'SELECT deleted_at FROM {table} WHERE id=?',(record_id,)).fetchone()
+            if not row:raise AppError('not_found',status=404)
+            stamp=(row['deleted_at'] or now()) if deleted else None
+            c.execute(f'UPDATE {table} SET deleted_at=? WHERE id=?',(stamp,record_id))
+            if kind=='items' and not deleted:
+                c.execute("UPDATE analysis_tasks SET status='pending',error=NULL WHERE item_id=? AND status='skipped' AND error='item_in_trash'",(record_id,))
+            if kind=='items' and deleted:
+                for digest in c.execute('SELECT day,item_ids FROM digests').fetchall():
+                    ids=json.loads(digest['item_ids'])
+                    if record_id in ids:c.execute('UPDATE digests SET item_ids=? WHERE day=?',(encode([i for i in ids if i!=record_id]),digest['day']))
+        return {'id':record_id,'deleted':deleted}
 
     def job(self,job_id):
         with self.db() as c:
@@ -299,7 +322,7 @@ class Store:
     def feedback(self,item_id,body):
         allowed={'saved','is_read','ignored','notes'}
         with self.db() as c:
-            if not c.execute('SELECT 1 FROM items WHERE id=?',(item_id,)).fetchone():raise AppError('not_found',status=404)
+            if not c.execute('SELECT 1 FROM items WHERE id=? AND deleted_at IS NULL',(item_id,)).fetchone():raise AppError('not_found',status=404)
             for k in allowed & body.keys():
                 value=str(body[k])[:30000] if k=='notes' else int(bool(body[k]))
                 c.execute(f'UPDATE items SET {k}=? WHERE id=?',(value,item_id))
@@ -326,4 +349,4 @@ class Store:
         with self.db() as c:
             active=(self.get('profile')['active'] or {}).get('version',0)
             pending=len(self.pending_items(active))
-            return {'total':c.execute('SELECT COUNT(*) FROM items').fetchone()[0],'saved':c.execute('SELECT COUNT(*) FROM items WHERE saved=1').fetchone()[0],'versions':c.execute('SELECT COUNT(*) FROM versions').fetchone()[0],'pending':pending,'runs':[dict(r) for r in c.execute('SELECT * FROM runs ORDER BY id DESC LIMIT 10')]}
+            return {'total':c.execute('SELECT COUNT(*) FROM items WHERE deleted_at IS NULL').fetchone()[0],'saved':c.execute('SELECT COUNT(*) FROM items WHERE saved=1 AND deleted_at IS NULL').fetchone()[0],'versions':c.execute('SELECT COUNT(*) FROM versions v JOIN items i ON i.id=v.item_id WHERE i.deleted_at IS NULL').fetchone()[0],'pending':pending,'runs':[dict(r) for r in c.execute("SELECT * FROM runs WHERE kind NOT IN ('history_plan','history_search') OR EXISTS(SELECT 1 FROM histories h WHERE h.id=json_extract(runs.argument,'$.input') AND h.deleted_at IS NULL) ORDER BY id DESC LIMIT 10")]}

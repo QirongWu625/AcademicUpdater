@@ -1,5 +1,14 @@
 # Changelog / 更新记录
 
+## 1.4.0 — 2026-10-26
+
+- Delete and restore library records and saved historical searches through separate trash views, with bilingual confirmation and immediate refresh.
+- Preserve notes, analyses, identities and search progress; old databases migrate automatically without removing records.
+- Exclude trashed papers from daily updates, historical results, analysis queues and exports. Collection respects deletions; hidden searches cannot resume until restored.
+- Guard deletion/restoration while a task is running and hide timelines whose cited evidence was removed.
+
+新增资料库与历史检索的删除、回收站及恢复功能。旧资料自动兼容，保留笔记、分析和检索进度；采集不会自动加回已删除论文，已删除检索不会自动恢复运行。
+
 ## 1.3.0 — 2026-10-26
 
 Initial public source release under MIT.

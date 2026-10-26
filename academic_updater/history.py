@@ -74,25 +74,31 @@ class History:
     @property
     def ai(self):return self.service.ai
 
-    def list(self):
+    def list(self,deleted=False):
         with self.store.db() as c:
-            return [{**dict(r),'scope':json.loads(r['scope'])} for r in c.execute('SELECT h.id,h.prompt,h.scope,h.status,h.created_at,h.updated_at,h.error,(SELECT COUNT(*) FROM history_items x WHERE x.history_id=h.id) AS count FROM histories h ORDER BY h.id DESC')]
+            return [{**dict(r),'scope':json.loads(r['scope'])} for r in c.execute('SELECT h.id,h.prompt,h.scope,h.status,h.created_at,h.updated_at,h.error,h.deleted_at,(SELECT COUNT(*) FROM history_items x JOIN items i ON i.id=x.item_id WHERE x.history_id=h.id AND i.deleted_at IS NULL) AS count FROM histories h WHERE h.deleted_at IS '+('NOT NULL' if deleted else 'NULL')+' ORDER BY h.id DESC')]
 
     def get(self,hid,include_items=True):
         with self.store.db() as c:
-            row=c.execute('SELECT * FROM histories WHERE id=?',(hid,)).fetchone()
+            row=c.execute('SELECT * FROM histories WHERE id=? AND deleted_at IS NULL',(hid,)).fetchone()
             if not row:raise AppError('not_found',status=404)
             result=dict(row)
             for key in ('scope','config','progress','report'):result[key]=json.loads(result[key])
-            result['counts']={r['status']:r['n'] for r in c.execute('SELECT status,COUNT(*) n FROM history_items WHERE history_id=? GROUP BY status',(hid,))}
+            result['counts']={r['status']:r['n'] for r in c.execute('SELECT x.status,COUNT(*) n FROM history_items x JOIN items i ON i.id=x.item_id WHERE history_id=? AND i.deleted_at IS NULL GROUP BY x.status',(hid,))}
             result['counts']['total']=sum(result['counts'].values())
             if result['config'].get('discovery_mode')=='landmark':
-                result['selection']={'selected':c.execute("SELECT COUNT(*) FROM history_items WHERE history_id=? AND json_extract(result,'$.selection.selected')=1",(hid,)).fetchone()[0]}
+                result['selection']={'selected':c.execute("SELECT COUNT(*) FROM history_items x JOIN items i ON i.id=x.item_id WHERE history_id=? AND i.deleted_at IS NULL AND json_extract(x.result,'$.selection.selected')=1",(hid,)).fetchone()[0]}
+            removed={r[0] for r in c.execute('SELECT x.item_id FROM history_items x JOIN items i ON i.id=x.item_id WHERE x.history_id=? AND i.deleted_at IS NOT NULL',(hid,))}
+            report_ids={r['id'] for r in result['report'].get('references',[])}
+            report_ids.update(i for m in result['report'].get('milestones',[]) for i in m.get('paper_ids',[]))
+            if removed & report_ids:
+                # Keep the saved report for restoration; never show a narrative with missing evidence.
+                result['report']={};result['report_hidden_due_to_deleted_papers']=True
             run=c.execute("SELECT id,kind,status,result FROM runs WHERE kind IN ('history_plan','history_search') AND json_extract(argument,'$.input')=? ORDER BY id DESC LIMIT 1",(hid,)).fetchone()
             result['job']={**dict(run),'result':json.loads(run['result'])} if run else None
             if include_items:
                 metrics=self.store.metrics();items=[]
-                for r in c.execute('SELECT x.*,i.saved,i.notes,i.is_read FROM history_items x JOIN items i ON i.id=x.item_id WHERE history_id=?',(hid,)):
+                for r in c.execute('SELECT x.*,i.saved,i.notes,i.is_read FROM history_items x JOIN items i ON i.id=x.item_id WHERE history_id=? AND i.deleted_at IS NULL',(hid,)):
                     item=json.loads(r['snapshot']);item.update(saved=r['saved'],notes=r['notes'],is_read=r['is_read'],history_analysis=json.loads(r['result']),history_status=r['status'])
                     items.append(attach_metric(item,metrics))
                 result['items']=sorted(items,key=lambda x:(not bool(x.get('published_at')),x.get('published_at') or '',x['id']))
@@ -145,7 +151,7 @@ class History:
         try:offset=max(0,int(options.get('offset',0)))
         except (TypeError,ValueError):raise AppError('invalid_setting')
         mode=options.get('filter','selected' if h['config'].get('discovery_mode')=='landmark' else 'all');query=str(options.get('q',''))[:300]
-        where=['x.history_id=?'];params=[hid]
+        where=['x.history_id=?','i.deleted_at IS NULL'];params=[hid]
         if mode=='selected':where.append("json_extract(x.result,'$.selection.selected')=1")
         elif mode=='excluded':where.append("x.status='completed' AND COALESCE(json_extract(x.result,'$.selection.selected'),0)=0")
         elif mode=='relevant':where.append("json_extract(x.result,'$.relevance') IN ('high','medium')")
@@ -154,7 +160,7 @@ class History:
         if query:where.append("(json_extract(x.snapshot,'$.title') LIKE ? OR json_extract(x.snapshot,'$.authors') LIKE ? OR json_extract(x.snapshot,'$.journal') LIKE ?)");params.extend(['%'+query+'%']*3)
         clause=' AND '.join(where);metrics=self.store.metrics()
         with self.store.db() as c:
-            total=c.execute('SELECT COUNT(*) FROM history_items x WHERE '+clause,params).fetchone()[0]
+            total=c.execute('SELECT COUNT(*) FROM history_items x JOIN items i ON i.id=x.item_id WHERE '+clause,params).fetchone()[0]
             rows=c.execute("SELECT x.*,i.saved,i.notes,i.is_read FROM history_items x JOIN items i ON i.id=x.item_id WHERE "+clause+" ORDER BY COALESCE(json_extract(x.snapshot,'$.published_at'),'')='',json_extract(x.snapshot,'$.published_at'),x.item_id LIMIT 100 OFFSET ?",[*params,offset]).fetchall()
         items=[]
         for r in rows:
@@ -207,6 +213,7 @@ class History:
                         pause()
                         try:
                             info=self.store.ingest(sources[stream['source']],record,historical=True)
+                            if info.get('deleted'):continue
                             item=self.store.item(info['id'])
                             snapshot={k:item[k] for k in ('id','kind','title','abstract','url','authors','published_at','journal','journal_key','issns','venue_type','current_version')}
                             evidence=citation_evidence(record) if stream['source']=='crossref' else {}
@@ -236,7 +243,7 @@ class History:
             self.update(hid,status='analyzing');checkpoint(job,phase='history_analyzing',current_title='')
             while True:
                 pause()
-                with self.store.db() as c:batch=[json.loads(r['snapshot']) for r in c.execute("SELECT snapshot FROM history_items WHERE history_id=? AND status='pending' ORDER BY item_id LIMIT 10",(hid,))]
+                with self.store.db() as c:batch=[json.loads(r['snapshot']) for r in c.execute("SELECT x.snapshot FROM history_items x JOIN items i ON i.id=x.item_id WHERE history_id=? AND x.status='pending' AND i.deleted_at IS NULL ORDER BY item_id LIMIT 10",(hid,))]
                 if not batch:break
                 self.analyze_batch(hid,{**h['scope'],'original_prompt':h['prompt']},batch,settings)
                 counts=self.get(hid,False)['counts'];checkpoint(job,history_analyzed=counts.get('completed',0),history_collected=counts['total'])

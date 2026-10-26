@@ -24,6 +24,8 @@ class Service:
             if kind=='history_search' and (not h['scope'].get('queries') or not (h['scope'].get('field_en') or h['scope'].get('field_zh'))):raise AppError('history_scope_required')
         if not self.lock.acquire(False):raise AppError('job_already_running',status=409)
         try:
+            if kind in HISTORY_KINDS:self.history.get(argument,False)
+            if kind=='item_analysis':self.store.item(argument)
             payload={'input':argument,'profile':self.store.get('profile')['active'],'settings':self.store.settings()}
             with self.store.db() as c:job=c.execute("INSERT INTO runs(kind,status,started_at,argument) VALUES(?,'running',?,?)",(kind,now(),encode(payload))).lastrowid
             self._launch(job);return job
@@ -39,6 +41,7 @@ class Service:
         if not self.lock.acquire(False):raise AppError('job_already_running',status=409)
         try:
             argument=row['argument'];progress=row['progress']
+            if row['kind'] in HISTORY_KINDS:self.history.get(argument.get('input'),False)
             if not argument:
                 argument={'input':None,'profile':self.store.get('profile')['active'],'settings':self.store.settings()}
                 # Old versions checkpointed each successful analysis but had no task table.
@@ -56,11 +59,17 @@ class Service:
         self.cancel.set();self._checkpoint(job,pause_requested=True)
 
     def recover_interrupted(self):
-        with self.store.db() as c:row=c.execute("SELECT id,progress FROM runs WHERE kind IN ('collect','analyze','history_plan','history_search') AND status='interrupted' ORDER BY id DESC LIMIT 1").fetchone()
+        with self.store.db() as c:row=c.execute("SELECT id,progress FROM runs WHERE kind IN ('collect','analyze','history_plan','history_search') AND status='interrupted' AND (kind IN ('collect','analyze') OR EXISTS(SELECT 1 FROM histories h WHERE h.id=json_extract(runs.argument,'$.input') AND h.deleted_at IS NULL)) ORDER BY id DESC LIMIT 1").fetchone()
         if row:
             if json.loads(row['progress']).get('pause_requested'):
                 with self.store.db() as c:c.execute("UPDATE runs SET status='paused',error='paused_by_user' WHERE id=?",(row['id'],))
             else:self.resume(row['id'])
+
+    def set_deleted(self,kind,record_id,deleted):
+        # Serialize with workers, including scheduled collection and resumed analysis.
+        if not self.lock.acquire(False):raise AppError('pause_before_delete',status=409)
+        try:return self.store.set_deleted(kind,record_id,deleted)
+        finally:self.lock.release()
 
     def _checkpoint(self,job,**changes):
         with self.store.db() as c:
@@ -82,7 +91,9 @@ class Service:
             elif kind=='history_search':result=self.history.search(payload['input'],payload['settings'],job)
             elif kind=='interpret':result={'profile':self.ai.interpret(payload['input'])}
             elif kind=='item_analysis':result={'analysis':self.ai.analyze(payload['input'],profile=payload['profile'],settings=payload['settings'])}
-            elif kind=='import':result=self.store.ingest(0,import_link(payload['input']['value'],payload['input'].get('kind','paper')))
+            elif kind=='import':
+                result=self.store.ingest(0,import_link(payload['input']['value'],payload['input'].get('kind','paper')))
+                if result.get('deleted'):raise AppError('item_in_trash')
             else:raise AppError('invalid_job')
             partial=result.get('errors') or result.get('truncated') or result.get('analysis',{}).get('errors')
             with self.store.db() as c:c.execute('UPDATE runs SET status=?,finished_at=?,result=?,error=NULL WHERE id=?',('partial' if partial else 'complete',now(),encode(result),job))
@@ -139,7 +150,10 @@ class Service:
             with self.store.db() as c:
                 task=c.execute("SELECT * FROM analysis_tasks WHERE run_id=? AND status='pending' ORDER BY id LIMIT 1",(job,)).fetchone()
             if not task:break
-            item=self.store.item(task['item_id'])
+            item=self.store.item(task['item_id'],include_deleted=True)
+            if item['deleted_at']:
+                with self.store.db() as c:c.execute("UPDATE analysis_tasks SET status='skipped',error='item_in_trash',updated_at=? WHERE id=?",(now(),task['id']))
+                continue
             with self.store.db() as c:
                 already=c.execute('SELECT 1 FROM analyses WHERE item_id=? AND version_id=? AND profile_version=?',(task['item_id'],task['version_id'],task['profile_version'])).fetchone()
                 if already or item['ignored']:

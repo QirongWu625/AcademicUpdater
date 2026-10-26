@@ -4,9 +4,13 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-An AI-assisted research feed and personal library that runs on your computer. Follow papers, industry news and conference reports, review how AI understands your research interests, and build a persistent collection without repeatedly importing the same records.
+An AI-powered, local-first research assistant for tracking papers and industry updates, discovering influential and foundational work, and organizing a deduplicated personal library.
 
-**Version 1.3.0 · MIT license · Contributions welcome**
+**Version 1.4.0 · MIT license · Contributions welcome**
+
+## Manage your collection
+
+Delete a library record or a saved historical search to move it to **Trash**, then restore it whenever needed. Library trash is a live filter; history trash is beside the saved-search list. Deleting a search keeps its papers in the library. Deleting a record hides it from Today, history results and normal exports; collection will not automatically reimport it. Saved notes, analyses and search progress are retained. Pause any running task before deleting or restoring records. Database backups include trash. A timeline citing removed papers is hidden until those papers are restored or the search is run again.
 
 ## See it in action
 
