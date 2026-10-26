@@ -6,11 +6,19 @@
 
 An AI-powered, local-first research assistant for tracking papers and industry updates, discovering influential and foundational work, and organizing a deduplicated personal library.
 
-**Version 1.4.0 · MIT license · Contributions welcome**
+**Version 1.5.0 · MIT license · Contributions welcome**
 
 ## Manage your collection
 
-Delete a library record or a saved historical search to move it to **Trash**, then restore it whenever needed. Library trash is a live filter; history trash is beside the saved-search list. Deleting a search keeps its papers in the library. Deleting a record hides it from Today, history results and normal exports; collection will not automatically reimport it. Saved notes, analyses and search progress are retained. Pause any running task before deleting or restoring records. Database backups include trash. A timeline citing removed papers is hidden until those papers are restored or the search is run again.
+Delete a library record or a saved historical search to move it to **Trash**, then restore it whenever needed. Open **Trash** in the sidebar, then switch between **Library records** and **Historical searches**. Search and restoration update immediately. Deleting a search keeps its papers in the library. Deleting a record hides it from Today, history results and normal exports; collection will not automatically reimport it. Saved notes, analyses and search progress are retained. Pause any running task before deleting or restoring records. Database backups include trash. A timeline citing removed papers is hidden until those papers are restored or the search is run again.
+
+## Starting a historical search
+
+Interpreting your field with AI saves a **draft**, not a paper search. Review the understood field and queries, then choose **Confirm field and search papers**. The app distinguishes searches not started, source failures, pending AI review and an empty shortlist. You can inspect all retrieved candidates without weakening the influential/foundational criteria.
+
+Quoted phrases, AND, OR and parentheses work in history queries. arXiv receives its native Boolean syntax; Crossref gets separate ranked text queries with a shared candidate cap. See the [arXiv query manual](https://info.arxiv.org/help/api/user-manual.html#51-details-of-query-construction) and [Crossref API documentation](https://github.com/Crossref/rest-api-doc).
+
+When you resume an older search with Boolean queries, affected source queries restart once with the corrected syntax. Saved papers and assessments remain; previous cursors are archived in the search export. Paused or deleted searches do not restart automatically.
 
 ## See it in action
 

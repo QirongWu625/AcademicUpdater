@@ -1,5 +1,15 @@
 # Changelog / 更新记录
 
+## 1.5.0 — 2026-10-26
+
+- Separate Trash navigation with live search and Library records / Historical searches tabs; preserve the old history-trash link.
+- Distinguish AI field interpretation from paper retrieval and put a clear confirmation/start button above the search form.
+- Fix quoted phrases, OR alternatives and parentheses in historical queries. Compile arXiv Boolean expressions correctly; split Crossref alternatives within the original per-query/source cap.
+- Distinguish pending assessment, empty shortlists, source failures and actual zero-result searches, with direct access to all candidates.
+- Retain existing records and trash contents. On explicit resume, replay legacy Boolean queries with the corrected adapter and archive their previous cursors; keep saved papers and assessments. Verify query behavior with live TMS metadata and regression tests.
+
+新增独立回收站；明确区分“理解领域”和“检索论文”。修复历史检索式转换，区分待评估、暂无入选、来源失败与真正无结果，保留旧数据和任务进度。
+
 ## 1.4.0 — 2026-10-26
 
 - Delete and restore library records and saved historical searches through separate trash views, with bilingual confirmation and immediate refresh.

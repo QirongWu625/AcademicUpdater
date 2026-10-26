@@ -1,4 +1,5 @@
 'use strict';
+const T={kind:'items',query:'',rows:[],request:0};
 Object.assign(COPY,{
   trash:['Trash','回收站'],rebuildTimeline:['Update timeline','更新发展时间线'],listLimit:['Showing up to 300 matching items. Exports include all active library records, excluding trash.','最多显示 300 条匹配结果。导出包含全部正常资料库条目，不含回收站。'],deleteRecord:['Delete','删除'],moveToTrash:['Move to trash','移至回收站'],
   cancelRemoval:['Cancel','取消'],restoreRecord:['Restore','恢复'],movedToTrash:['Moved to trash. You can restore it there.','已移至回收站，可在回收站恢复。'],
@@ -10,6 +11,9 @@ Object.assign(COPY,{
   historyTrash:['Research history · Trash','研究发展史 · 回收站'],
   historyTrashHint:['Restore a search with its saved results and progress. Deleting a search does not delete library records.','可恢复检索及已保存的结果和进度。删除检索不会删除资料库条目。'],
   backToHistories:['Back to research history','返回研究发展史'],
+  trashSub:['Deleted library records and historical searches, together in one place. Restore them whenever needed.','集中管理已删除的资料条目和历史检索，可随时恢复。'],
+  trashItems:['Library records','资料条目'],trashHistories:['Historical searches','历史检索'],
+  trashSearch:['Search deleted records','搜索已删除的条目'],backToLibrary:['Back to library','返回资料库'],trashLimit:['Up to 300 matching library records are shown. Use search to find a specific record.','最多显示 300 条匹配资料，可搜索查找特定条目。'],
   reportRemovedEvidence:['The saved timeline cites papers now in the trash, so it is hidden. Restore those papers to show the original timeline, or run this search again to synthesize the remaining evidence.','已保存的时间线引用了回收站中的论文，因此暂时隐藏。恢复这些论文可查看原时间线，或再次运行此检索，基于剩余证据生成概述。']
 });
 Object.assign(ERRORS,{
@@ -47,6 +51,19 @@ async function manageRecord(action,id){
   await bootstrap();await render();notify(t(deleted?'movedToTrash':'restoredRecord'));
 }
 function trashItemCard(i){return `<article class="item trash-item" data-item="${i.id}"><div class="item-top"><span class="badge">${esc(t('trash'))}</span><span>${esc(displayDate(i.deleted_at))}</span></div><h3>${esc(i.title)}</h3>${bibliographyHTML(i)}<p class="small muted">${esc(t('paperTrashHint'))}</p><div class="actions">${btn('item-restore','restoreRecord',false,`data-id="${i.id}"`)}</div></article>`}
-function historyTrashRows(rows){return rows.length?rows.map(h=>`<article class="panel"><h2>${esc(historyTitle(h))}</h2><p class="small muted">${esc(h.prompt)}</p><p class="small">${h.count} ${esc(t('papersCount'))} · ${esc(displayDate(h.deleted_at))}</p>${btn('history-restore','restoreRecord',false,`data-id="${h.id}"`)}</article>`).join(''):`<div class="empty"><h2>${esc(t('emptyTrash'))}</h2></div>`}
-async function historyTrashPage(){const rows=await api('/api/histories?deleted=1');return header('historyTrash','historyTrashHint',`<a href="#history">${esc(t('backToHistories'))}</a>`)+`<div id="history-trash-results">${historyTrashRows(rows)}</div>`}
-async function refreshHistoryTrash(){const rows=await api('/api/histories?deleted=1');if(S.page==='history'&&H.trash&&$('#history-trash-results'))$('#history-trash-results').innerHTML=historyTrashRows(rows)}
+function historyTrashRows(rows){return rows.length?rows.map(h=>`<article class="panel"><h2>${esc(historyTitle(h))}</h2><p class="small muted">${esc(h.prompt)}</p><p class="small">${h.count} ${esc(t('papersCount'))} · ${esc(displayDate(h.deleted_at))}</p>${btn('history-restore','restoreRecord',false,`data-id="${h.id}"`)}</article>`).join(''):`<div class="empty"><h2>${esc(t(T.query?'noResults':'emptyTrash'))}</h2></div>`}
+async function loadTrash(){
+  const request=++T.request,kind=T.kind,query=T.query;
+  let rows=await api(kind==='items'?'/api/items?deleted=1&q='+encodeURIComponent(query):'/api/histories?deleted=1');
+  if(kind==='histories'&&query.trim())rows=rows.filter(h=>[h.prompt,h.scope?.field_en,h.scope?.field_zh].join(' ').toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  if(request!==T.request||kind!==T.kind||query!==T.query)return false;
+  T.rows=rows;return true;
+}
+function trashRows(){return T.kind==='histories'?historyTrashRows(T.rows):T.rows.length?T.rows.map(trashItemCard).join(''):`<div class="empty"><h2>${esc(t(T.query?'noResults':'emptyTrash'))}</h2></div>`}
+async function trashPage(){
+  await loadTrash();const items=T.kind==='items';
+  return header('trash','trashSub',`<a href="${items?'#library':'#history'}">${esc(t(items?'backToLibrary':'backToHistories'))}</a>`)+`<div class="profile-tabs" role="navigation" aria-label="${esc(t('trash'))}">${['items','histories'].map(k=>`<a href="#trash/${k}" ${T.kind===k?'class="active" aria-current="page"':''}>${esc(t(k==='items'?'trashItems':'trashHistories'))}</a>`).join('')}</div><label>${esc(t('trashSearch'))}<input id="trash-search" value="${esc(T.query)}" placeholder="${esc(t('trashSearch'))}"></label><p class="small muted">${esc(t(items?'paperTrashHint':'historyTrashHint'))}</p>${items?`<p class="tiny muted">${esc(t('trashLimit'))}</p>`:''}<div id="trash-results">${trashRows()}</div>`;
+}
+async function refreshTrash(){if(S.page==='trash'&&await loadTrash()&&S.page==='trash'&&$('#trash-results'))$('#trash-results').innerHTML=trashRows()}
+let trashSearchTimer;
+document.addEventListener('input',e=>{if(e.target.id==='trash-search'){T.query=e.target.value;clearTimeout(trashSearchTimer);trashSearchTimer=setTimeout(()=>refreshTrash().catch(fail),250)}});
