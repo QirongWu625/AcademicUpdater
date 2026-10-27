@@ -38,8 +38,8 @@ vm.runInContext("const t=k=>COPY[k]?.[0]||k,esc=v=>String(v??''),btn=(a,l)=>'<bu
   assert.equal(await pending,false);assert.equal(vm.runInContext('T.rows.length',context),0);
   vm.runInContext(`
     const displayDate=x=>x||'',errorText=x=>x,lang=()=> 'en';
-    S.boot={settings:{auto_resume:true},execution:{active:3,limit:3},jobs:[
-      {id:1,kind:'collect',status:'running',argument:{input:null},progress:{phase:'analysis'},queue:{total:9,completed:3}},
+    S.boot={local_day:'2026-10-27',version:'1.6.1',settings:{auto_resume:true},execution:{active:3,limit:3},jobs:[
+      {id:1,kind:'collect',status:'running',argument:{input:{day:'2026-10-27'}},progress:{phase:'analysis'},queue:{total:9,completed:3}},
       {id:2,kind:'history_search',status:'running',argument:{input:7},progress:{history_collected:100,history_analyzed:20}},
       {id:3,kind:'analyze',status:'paused',argument:{},progress:{pause_requested:true},error:'paused_by_user'}
     ]};
@@ -50,5 +50,20 @@ vm.runInContext("const t=k=>COPY[k]?.[0]||k,esc=v=>String(v??''),btn=(a,l)=>'<bu
   html=vm.runInContext('jobBanner()',context);
   assert.match(html,/collectJob #1/);assert.match(html,/historyPage #2/);assert.match(html,/analyzeJob #3/);
   assert.match(html,/3 \/ 3/);assert.equal((html.match(/pauseJob/g)||[]).length,2);
-  console.log('UI state regression checks passed (filters, empty states, trash navigation).');
+  assert.equal(vm.runInContext('activeCollection().id',context),1);
+  assert.match(vm.runInContext('collectionButton()',context),/View collection progress/);
+  const button={outerHTML:''};context.document.querySelectorAll=()=>[button];
+  vm.runInContext('syncCollectionButtons()',context);assert.match(button.outerHTML,/View collection progress/);
+  let notice='',scrolled=false;context.notify=text=>{notice=text};
+  controls['#job-card-1']={scrollIntoView(){scrolled=true}};
+  vm.runInContext('focusCollection(1)',context);assert.match(notice,/3 \/ 9/);assert.equal(scrolled,true);
+  vm.runInContext("S.boot.jobs[0].status='complete';syncCollectionButtons()",context);
+  assert.equal(vm.runInContext('activeCollection()',context),undefined);assert.doesNotMatch(button.outerHTML,/View collection progress/);
+  vm.runInContext("S.boot.jobs[0].status='running';S.boot.jobs[0].argument.input.day='2026-10-26'",context);
+  assert.equal(vm.runInContext('activeCollection()',context),undefined);assert.equal(vm.runInContext('historyBusy(7)',context),true);
+  controls['meta[name="academic-version"]']={content:'1.6.0'};
+  assert.match(vm.runInContext('versionNotice()',context),/Save any unfinished edits/);
+  controls['meta[name="academic-version"]'].content='1.6.1';
+  assert.doesNotMatch(vm.runInContext('versionNotice()',context),/Save any unfinished edits/);
+  console.log('UI state regression checks passed (filters, trash, parallel jobs, collection progress, upgrade notice).');
 })().catch(error=>{console.error(error);process.exitCode=1});

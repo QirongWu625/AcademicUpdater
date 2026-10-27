@@ -28,6 +28,18 @@ class Service:
         if kind=='collect':return (kind,(argument or {}).get('day'))
         return ('history',argument) if kind in HISTORY_KINDS else (kind,argument if kind=='item_analysis' else None)
 
+    def local_day(self):
+        return (dt.datetime.now(dt.timezone.utc)+dt.timedelta(hours=self.store.settings()['utc_offset'])).date().isoformat()
+
+    def collect_updates(self):
+        # One click and concurrent/repeated clicks resolve to the same active run.
+        # Hold the registry guard across lookup and start, including scheduler races.
+        with self.guard:
+            day=self.local_day();group=self.group('collect',{'day':day})
+            existing=next((job for job,w in self.workers.items() if w['group']==group),None)
+            if existing is not None:return {'job_id':existing,'already_running':True}
+            return {'job_id':self.start_job('collect',{'day':day}),'already_running':False}
+
     def _claim(self,kind,argument):
         group=self.group(kind,argument)
         if any(w['group']==group for w in self.workers.values()):raise AppError('job_already_running',status=409)
@@ -37,7 +49,7 @@ class Service:
 
     def start_job(self,kind,argument=None):
         if kind=='collect' and argument is None:
-            argument={'day':(dt.datetime.now(dt.timezone.utc)+dt.timedelta(hours=self.store.settings()['utc_offset'])).date().isoformat()}
+            argument={'day':self.local_day()}
         if kind in HISTORY_KINDS:
             h=self.history.get(argument,False)
             if kind=='history_plan' and h['progress'].get('search_started'):raise AppError('history_locked')

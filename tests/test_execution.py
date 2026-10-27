@@ -34,11 +34,32 @@ class ExecutionTests(unittest.TestCase):
         with patch('academic_updater.history.historical_page',side_effect=page),patch('academic_updater.service.collect',return_value=([],False)):
             history_job=self.service.start_job('history_search',hid);self.assertTrue(started.wait(2))
             with self.assertRaises(AppError):self.service.start_job('history_search',hid)
-            daily=self.service.start_job('collect')
+            requested=self.service.collect_updates();daily=requested['job_id'];self.assertFalse(requested['already_running'])
             end=time.monotonic()+3
             while self.store.job(daily)['status']=='running' and time.monotonic()<end:time.sleep(.02)
             self.assertEqual(self.store.job(daily)['status'],'complete');self.assertEqual(self.store.job(history_job)['status'],'running')
             release.set();self.wait()
+    def test_simultaneous_collection_clicks_share_one_active_run(self):
+        started=threading.Event();release=threading.Event()
+        def collect(*args):started.set();release.wait(5);return [],False
+        with patch('academic_updater.service.collect',side_effect=collect):
+            try:
+                with ThreadPoolExecutor(max_workers=8) as pool:requests=list(pool.map(lambda _:self.service.collect_updates(),range(8)))
+                self.assertTrue(started.wait(2));self.assertEqual(len({r['job_id'] for r in requests}),1)
+                self.assertEqual(sum(not r['already_running'] for r in requests),1)
+                with self.store.db() as c:self.assertEqual(c.execute("SELECT COUNT(*) FROM runs WHERE kind='collect'").fetchone()[0],1)
+            finally:release.set();self.wait()
+
+    def test_collect_click_reuses_scheduled_run_and_allows_a_new_day(self):
+        started=threading.Event();release=threading.Event()
+        def collect(*args):started.set();release.wait(5);return [],False
+        with patch('academic_updater.service.collect',side_effect=collect),patch.object(self.service,'local_day',return_value='2026-10-27'):
+            try:
+                old=self.service.start_job('collect',{'day':'2026-10-26'});self.assertTrue(started.wait(2))
+                self.service.schedule_tick(dt.datetime(2026,10,27,5,tzinfo=dt.timezone.utc))
+                requested=self.service.collect_updates();self.assertTrue(requested['already_running']);self.assertNotEqual(requested['job_id'],old)
+                with self.store.db() as c:self.assertEqual(c.execute("SELECT COUNT(*) FROM runs WHERE kind='collect'").fetchone()[0],2)
+            finally:release.set();self.wait()
     def test_daily_paper_assessment_is_parallel_and_globally_bounded(self):
         ids=[self.add(i) for i in range(1,8)];started=threading.Event();release=threading.Event();guard=threading.Lock();active=0;maximum=0;seen=[]
         def analyze(item_id,**kw):
@@ -72,12 +93,16 @@ class ExecutionTests(unittest.TestCase):
             with guard:
                 active+=1;maximum=max(maximum,active);seen.extend(p['id'] for p in payload['papers'])
                 if active==3:started.set()
-            release.wait(4)
+            release.wait(15)
             with guard:active-=1
             return {'papers':[answer(p) for p in payload['papers']]}
         self.ai.generate=generate
         with patch('academic_updater.history.historical_page',return_value=([history_record(i) for i in range(1,32)],{'position':31,'done':True,'total':31})):
-            job=self.service.start_job('history_search',hid);self.assertTrue(started.wait(3));release.set();self.wait()
+            job=self.service.start_job('history_search',hid)
+            # Ingestion writes all 31 records before assessment begins. Allow
+            # slower Windows disks without relaxing the three-worker assertion.
+            try:self.assertTrue(started.wait(10))
+            finally:release.set();self.wait()
         self.assertEqual(maximum,3);self.assertEqual(len(seen),31);self.assertEqual(len(set(seen)),31)
         self.assertEqual(self.store.job(job)['status'],'complete');self.assertEqual(self.service.history.get(hid,False)['counts']['completed'],31)
     def test_scheduler_catches_up_while_history_and_old_pauses_exist(self):

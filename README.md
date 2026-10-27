@@ -6,7 +6,7 @@
 
 An AI-powered, local-first research assistant for tracking papers and industry updates, discovering influential and foundational work, and organizing a deduplicated personal library.
 
-**Version 1.6.0 · MIT license · Contributions welcome**
+**Version 1.6.1 · MIT license · Contributions welcome**
 
 ## Automatic updates and parallel work
 

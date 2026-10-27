@@ -32,7 +32,7 @@ class Application:
         learning=self.store.saved_scope_snapshot(include_papers=False)
         return {'app':'AcademicUpdater','version':__version__,'csrf':self.csrf,'settings':self.store.settings(),'profile':self.store.get('profile'),'sources':self.store.sources(),'stats':self.store.stats(),'auth':self.auth_status(),'capabilities':self.ai.capabilities(),'histories':self.service.history.list(),
                 'jobs':[self.store.job(i) for i in ids],'execution':self.service.ai_limiter.state(),'startup':startup.status(),
-                'scheduler':self.store.get('scheduler_status',{}),'scheduled_day':self.store.get('scheduled_day'),
+                'scheduler':self.store.get('scheduler_status',{}),'scheduled_day':self.store.get('scheduled_day'),'local_day':self.service.local_day(),
                 'saved_learning':{'pending':learning['changed'],'count':learning['count']} if learning else None}
 
     def auth_status(self):
@@ -117,7 +117,9 @@ def make_server(app,port):
                 files={'/logo.png':'logo.png','/':'index.html','/index.html':'index.html','/app.js':'app.js','/history.js':'history.js','/trash.js':'trash.js','/execution.js':'execution.js','/i18n.js':'i18n.js','/styles.css':'styles.css','/guide':'guide.html'}
                 if path not in files:raise AppError('not_found',status=404)
                 file=static/files[path]
-                self.send(file.read_bytes(),(mimetypes.guess_type(str(file))[0] or 'text/plain')+'; charset=utf-8')
+                content=file.read_bytes()
+                if file.name=='index.html':content=content.replace(b'__APP_VERSION__',__version__.encode())
+                self.send(content,(mimetypes.guess_type(str(file))[0] or 'text/plain')+'; charset=utf-8')
             except Exception as exc:self.handle_error(exc)
 
         def do_POST(self):
@@ -162,7 +164,7 @@ def make_server(app,port):
                     job_id=int(job_action[1])
                     if job_action[2]=='pause':app.service.pause(job_id);return self.json(app.store.job(job_id))
                     return self.json({'job_id':app.service.resume(job_id)})
-                if path=='/api/collect':return self.json({'job_id':app.service.start_job('collect')})
+                if path=='/api/collect':return self.json(app.service.collect_updates())
                 if path=='/api/analyze':return self.json({'job_id':app.service.start_job('analyze')})
                 if path=='/api/import':
                     if body.get('kind','paper') not in ('paper','industry','conference'):raise AppError('invalid_source_type')

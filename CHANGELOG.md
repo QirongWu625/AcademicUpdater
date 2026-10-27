@@ -1,5 +1,13 @@
 # Changelog / 更新记录
 
+## 1.6.1 — 2026-10-27
+
+- Repeated Collect updates requests return the current day's active collection instead of a conflict, including simultaneous clicks and requests racing scheduled collection.
+- Replace Collect updates with View collection progress while that collection is running; keep independent history searches and next-day collection available. Refresh the button as background tasks start or finish.
+- Show a refresh notice after application upgrades without discarding unsaved edits automatically. Clarify the duplicate-task message in both languages.
+
+修复采集按钮的误导提示：采集已在运行时，重复点击会显示现有进度；不新建重复任务。保留跨任务并行，并提示已打开的旧界面刷新。
+
 ## 1.6.0 — 2026-10-27
 
 - Run daily collection, independent historical searches and paper analysis concurrently. Share a fair AI request limit (default 3, adjustable 1–8); checkpoint each completed paper or history batch. Prevent duplicate work on the same paper/version/scope/model.

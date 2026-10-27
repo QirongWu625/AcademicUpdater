@@ -1,5 +1,10 @@
 'use strict';
 Object.assign(COPY,{
+  viewCollection:['View collection progress','查看采集进度'],
+  collectionAlreadyRunning:['Collection is already running. Showing the existing task.','采集已在运行，已为你显示现有任务进度。'],
+  collectionAssessing:['Collection is assessing papers','采集正在评估论文'],
+  appUpdateAvailable:['The application was updated. Save any unfinished edits, then refresh this page to load the new interface.','应用已更新。请先保存尚未提交的编辑，再刷新页面加载新版界面。'],
+  reloadApp:['Refresh page','刷新页面'],
   executionTitle:['Automatic work & parallel assessment','自动运行与并行评估'],
   aiConcurrency:['Concurrent AI requests','AI 同时请求数'],
   concurrencyHelp:['Shared across daily updates and history searches. History assesses up to 10 papers per request. Higher reasoning effort can still take longer; provider and daily limits apply.','每日更新与历史检索共享此上限；历史评估每次最多 10 篇。更高推理档位仍可能耗时较长，并受服务方及每日请求额度限制。'],
@@ -41,6 +46,18 @@ Object.assign(ERRORS,{
 
 let jobStates=new Map(),jobPollActive=false,profileViewChanged=false;
 function runningJobs(){return (S.boot?.jobs||[]).filter(r=>r.status==='running')}
+function activeCollection(){return runningJobs().find(r=>r.kind==='collect'&&r.argument?.input?.day===S.boot.local_day)}
+function collectionButton(){const r=activeCollection();return r?btn('view-collection','viewCollection',true,`data-id="${r.id}"`):btn('collect','collect',true)}
+function syncCollectionButtons(){document.querySelectorAll('[data-action="collect"],[data-action="view-collection"]').forEach(el=>{el.outerHTML=collectionButton()})}
+function versionNotice(){const loaded=$('meta[name="academic-version"]')?.content;return `<div id="app-update">${loaded&&S.boot?.version&&loaded!==S.boot.version?`<div class="warning">${esc(t('appUpdateAvailable'))} ${btn('reload-app','reloadApp')}</div>`:''}</div>`}
+function focusCollection(id){
+  const r=(S.boot.jobs||[]).find(r=>r.id===id);
+  if(!r||r.status!=='running'){notify(t('jobFinished'));return}
+  const q=r.queue||{};
+  notify(r.progress?.phase==='analysis'?`${t('collectionAssessing')}: ${q.completed||0} / ${q.total||0}`:t('collectionAlreadyRunning'));
+  $('#job-card-'+id)?.scrollIntoView({behavior:'smooth',block:'center'});
+}
+async function viewCollection(id){await refreshVisible();focusCollection(id)}
 function historyBusy(id){return runningJobs().some(r=>r.kind.startsWith('history_')&&r.argument?.input===id)}
 function jobName(r){return t(({collect:'collectJob',analyze:'analyzeJob',interpret:'interpretJob',item_analysis:'itemAnalysisJob',import:'importJob',history_plan:'historyInterpret',history_search:'historyPage'})[r.kind]||r.kind)+' #'+r.id}
 function syncJobs(){
@@ -55,11 +72,13 @@ function syncJobs(){
     }
     jobStates.set(r.id,r.status);
   }
+  syncCollectionButtons();const notice=$('#app-update');if(notice)notice.outerHTML=versionNotice();
   if(runningJobs().length)poll();
 }
 async function job(path,body={},kind){
   const result=await api(path,body);jobStates.set(result.job_id,'running');
-  notify(t('jobWorking'));await bootstrap();await render();poll();
+  if(!result.already_running)notify(t('jobWorking'));
+  await bootstrap();await render();if(result.already_running)focusCollection(result.job_id);poll();
 }
 function poll(){
   if(jobPollActive)return;jobPollActive=true;
@@ -81,7 +100,7 @@ function jobBanner(){
   const jobs=all.filter(r=>r.status==='running'||(resumable(r)&&!all.some(other=>other.id>r.id&&group(other)===group(r))));
   if(!jobs.length)return '<div id="job-status"></div>';
   const x=S.boot.execution||{};
-  return `<section id="job-status" class="job-stack" aria-label="${esc(t('runs'))}"><div class="section-label"><strong>${esc(t('runs'))}</strong><span class="small muted">${x.active||0} / ${x.limit||3} ${esc(t('activeRequests'))}</span></div>${jobs.map(r=>`<div class="job-banner"><div><strong>${r.status==='running'?'<span class="busy"></span>':''}${esc(jobName(r))}</strong> · ${esc(t(r.status))}<div class="small">${esc(jobInfo(r))}</div>${r.progress?.model?`<div class="tiny muted">${esc(r.progress.model)} · ${esc(t('effort_'+(r.progress.reasoning_effort||'default')))}</div>`:''}${jobReason(r)}</div><div class="toolbar">${jobControls(r)}</div></div>`).join('')}</section>`;
+  return `<section id="job-status" class="job-stack" aria-label="${esc(t('runs'))}"><div class="section-label"><strong>${esc(t('runs'))}</strong><span class="small muted">${x.active||0} / ${x.limit||3} ${esc(t('activeRequests'))}</span></div>${jobs.map(r=>`<div class="job-banner" id="job-card-${r.id}"><div><strong>${r.status==='running'?'<span class="busy"></span>':''}${esc(jobName(r))}</strong> · ${esc(t(r.status))}<div class="small">${esc(jobInfo(r))}</div>${r.progress?.model?`<div class="tiny muted">${esc(r.progress.model)} · ${esc(t('effort_'+(r.progress.reasoning_effort||'default')))}</div>`:''}${jobReason(r)}</div><div class="toolbar">${jobControls(r)}</div></div>`).join('')}</section>`;
 }
 function jobEvents(r){return r.events?.length?`<details class="job-events"><summary>${esc(t('taskEvents'))}</summary>${r.events.map(e=>`<p class="tiny"><time>${esc(displayDate(e.at))} ${esc(new Date(e.at).toLocaleTimeString(lang()))}</time> · ${esc(t('event_'+e.event))}<br>${esc(errorText(e.detail.split(':')[0],e.detail.split(':').slice(1).join(':').trim()))}</p>`).join('')}</details>`:''}
 function runHTML(r){
