@@ -10,6 +10,8 @@ AcademicUpdater uses a Python HTTP server, SQLite and browser-native HTML/CSS/Ja
 | `academic_updater/server.py` | Local API routes, request validation and static files / 本机接口及静态文件 |
 | `academic_updater/storage.py` | SQLite schema, migrations, identifiers and persistent application state / 数据库及迁移 |
 | `academic_updater/sources.py` | Crossref, arXiv and RSS/Atom collection / 来源采集 |
+| `academic_updater/discovery.py` | OpenAlex semantic retrieval and author identity / 语义召回与作者身份 |
+| `academic_updater/journal_lookup.py` | AI extraction with verified publisher IF evidence / 自动期刊指标核验 |
 | `academic_updater/metadata.py` | Author/journal metadata and journal metrics / 元数据及期刊指标 |
 | `academic_updater/service.py` | Daily collection, analysis and resumable jobs / 日常任务及恢复 |
 | `academic_updater/history.py` | Saved historical searches, paging, assessment and timeline / 历史检索及时间线 |

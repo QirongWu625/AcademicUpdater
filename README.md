@@ -6,35 +6,39 @@
 
 An AI-powered, local-first research assistant for tracking papers and industry updates, discovering influential and foundational work, and organizing a deduplicated personal library.
 
-**Version 1.7.0 · MIT license · Contributions welcome**
+**Version 1.8.0 · MIT license · Contributions welcome**
 
-## AI relevance and SciSpace
+## Semantic discovery and author searches
 
-The AI interprets the **whole research question**, proposes complementary search expressions and judges candidates against their **abstracts**, core problem, method, target and exclusions. Equivalent terminology can match without shared keywords. Broad discipline overlap alone does not mean high relevance. Papers without abstracts are marked **uncertain**; the app does not claim to read unavailable full text. Existing completed assessments are preserved rather than automatically reprocessed.
+AI interprets the whole research question and plans complementary natural-language searches. **OpenAlex semantic search** retrieves candidates using embeddings of titles and abstracts; Crossref/arXiv supply complementary text-based retrieval. AI then assesses each available abstract against the problem, method, target and exclusions, with grounded quotations. Missing abstracts mean uncertain topical relevance, not a claim of full-text reading.
 
-Candidate retrieval from Crossref/arXiv is still **text search, not a semantic vector search engine**. Daily arXiv queries now retain complete concept intersections; Crossref uses all planned queries, ranks within the recent indexing window by relevance, and shares the source cap across alternatives. Search ranks are candidates, not AI assessments; no completeness or precision guarantee is implied.
+**Author-centered requests use verified identities.** After interpreting your prompt, the app shows the author name, institution, ORCID when available, and resolved OpenAlex identity for review. It retrieves works by author ID and checks each authorship record, rather than searching titles for the person's name. Institution disambiguates the person without excluding earlier career papers. An unspecified topic stays unrestricted; author mode does not apply the landmark-only filter. Ambiguous identities stop with an actionable message.
 
-Choose **SciSpace** in Library or Research history, or open **Personal profile → Sources & schedule**. Copy the editable research question to [SciSpace](https://scispace.com/literature-review), run the search there, export **CSV or RIS**, and preview/import it here. Structured JSON with a `papers` array is also accepted. See the [official RIS export instructions](https://scispace.com/help/en/articles/10706857-how-to-export-citations-from-scispace-to-endnote) and this [synthetic CSV example](docs/examples/scispace.csv).
+For example, “Luca Cocchi at QIMR / QIMR Berghofer, with no topic restriction” is treated as an author bibliography. Copy and reinterpret an older search to use the new strategy; existing searches and assessments retain their original checkpoints.
 
-- A website account or this chat's SciSpace connector does **not** configure a standalone API connection. This release supports **manual import**, not scheduled SciSpace retrieval. No browser session cookies or undocumented API endpoints are used.
-- Import at most 200 papers / 180 KB per file. Each record needs a title and DOI or HTTP(S) URL. Include abstracts, authors, journal and publication date where available. No journal impact factors are inferred.
-- Preview is read-only. Import merges by DOI/URL, preserves existing metadata, feedback and assessments, and does not resurrect trash. Invalid rows and identifiers, year exclusions and counts are reported. Imported data remains attributed to SciSpace, including the supplied question and import time.
-- A saved history must have a confirmed field and queries before importing. Pause that history's active task first; unrelated jobs may continue. Its year bounds are honored (undated records are skipped when bounded). New candidates invalidate the old timeline; **Review imported papers** assesses pending items when AI analysis is enabled. Importing into an unstarted draft creates an import-only review; existing search checkpoints remain intact.
-- Imported citation counts remain unverified source metadata, not Crossref citation evidence. Papers must pass the existing relevance and foundational-evidence criteria to enter the landmark shortlist. A search result is never automatically labeled foundational.
+OpenAlex semantic retrieval returns at most **50 candidates per description**, with up to three descriptions and explicit source-limit reporting. Public access has its own quota and author paging is bounded by 10,000 records. Coverage depends on source indexing and access, not a promise to find every paper. See [semantic search](https://help.openalex.org/api/semantic-search/) and [author filtering](https://help.openalex.org/api/filtering/).
 
-![SciSpace export preview with synthetic records](docs/images/scispace-en.png)
+## Automatic journal impact factors
+
+New journals and old papers missing IF enter an automatic lookup queue. AI searches public publisher/Clarivate evidence; when native web search is unavailable, the app resolves the publisher homepage through OpenAlex, reads public metrics pages, and asks AI to extract the value. A two-year **JIF, metric year, source URL and exact quotation** must pass verification before saving. CiteScore, five-year IF, model guesses and unsupported values are rejected. No dataset import is needed. Publisher restrictions or missing evidence can leave IF unavailable; failures are shown and retried. Manual corrections remain available in paper details.
+
+![Profile discovery and data management controls](docs/images/profile-en.png)
 
 ## Automatic updates and parallel work
 
-Daily updates and independent history searches can run together. Paper assessment defaults to **3 concurrent AI requests**, shared across all tasks. Click **Set parallelism** beside active tasks or in **Personal profile → AI connection** to choose 1–8 while tasks keep running. The task panel shows actual active requests per task and total waiting requests. The original setting also remains in **Sources & schedule**. Raising the limit admits more requests immediately; lowering it lets in-flight requests finish. History processes up to 10 papers per request. Each task has its own pause/resume control; completed results are retained. Up to 8 independent jobs can be active. Model speed, reasoning effort, provider limits and the existing daily request budget still apply.
+Daily updates and independent history searches can run together. Paper assessment defaults to **3 concurrent AI requests**, shared across all tasks. Click **Set parallelism** beside active tasks or in **Personal profile → AI connection** to choose 1–64 while tasks keep running. The task panel shows actual active requests per task and total waiting requests. The original setting also remains in **Sources & schedule**. Raising the limit admits more requests immediately; lowering it lets in-flight requests finish. History processes up to 10 papers per request. Each task has its own pause/resume control; completed results are retained. Up to 16 independent jobs can be active. Model speed, reasoning effort, provider limits and the existing daily request budget still apply.
 
 Enable **Windows login startup** to launch in the background after signing in. The scheduler catches up that day's missed update after the configured time, and the next day's collection can start while an older analysis continues. The computer must be awake and online. Unexpected process exits resume from saved progress after restart; transient network failures use bounded retries, daily-budget pauses continue after local midnight, and manual pauses stay paused. Recent activity shows interruption causes and retry times. After five automatic job retries, or for authentication/configuration errors, resolve the displayed issue and resume manually.
 
 **Learn from saved papers** refines the understood field before a new collection only when the current saved set changes, including unsaving or deleting/restoring saved papers. It recomputes from your original applied field and explicit exclusions, so removed papers stop contributing positive evidence. No change means no learning request; removing all saves restores the baseline without AI. For more than 80 saved papers, an evenly distributed sample is used and its size is shown. Your original prompt, pending drafts, old analyses and independently configured historical searches remain available. If learning fails, collection uses the existing field and reports the deferred update.
 
+Set **Daily AI requests to 0** for no application daily cap. Increasing an exhausted budget makes eligible paused jobs retry automatically. Provider quotas, rate limits and charges still apply.
+
 ## Manage your collection
 
 Delete a library record or a saved historical search to move it to **Trash**, then restore it whenever needed. Open **Trash** in the sidebar, then switch between **Library records** and **Historical searches**. Search and restoration update immediately. Deleting a search keeps its papers in the library. Deleting a record hides it from Today, history results and normal exports; collection will not automatically reimport it. Saved notes, analyses and search progress are retained. Pause any running task before deleting or restoring records. Database backups include trash. A timeline citing removed papers is hidden until those papers are restored or the search is run again.
+
+**Personal profile → Data management** can clear research data, including trash, saved papers, notes, analyses, histories, journal metrics and task records. It requires `CLEAR ALL`, no running jobs, and a successful automatic backup. Research settings, AI credentials and usage accounting remain; daily collection is paused. This is separate from reversible Trash.
 
 ## Starting a historical search
 
@@ -61,11 +65,11 @@ Screenshots of the **real application** using synthetic demonstration records. T
 
 ## What it does
 
-- **Today:** collect from Crossref, arXiv and public RSS/Atom feeds; rank analyzed items by relevance with color and text labels.
+- **Today:** collect from OpenAlex, Crossref, arXiv and public RSS/Atom feeds; rank analyzed items by relevance with color and text labels.
 - **Research field:** describe your interests in a prompt, then review and edit the AI's interpretation, bilingual field names, keywords, exclusions and search queries before applying it.
 - **Library:** save papers and updates with authors, journal, notes, reading status and source versions. Filter immediately and sort by date, title, first-author surname, journal, relevance or impact factor.
 - **Research history:** save a separate historical search, prioritize influential and foundational candidates, and build a referenced timeline from the shortlist. Searches and results can be reopened and exported.
-- **Journal metrics:** enter or import impact factors with a year and source. Missing values remain missing; no commercial journal-metrics dataset is bundled.
+- **Journal metrics:** automatically retrieve and verify public impact factors with a year, source and evidence. Missing values remain missing; no commercial journal-metrics dataset is bundled.
 - **AI settings:** use an eligible ChatGPT sign-in connection, an OpenAI API key, or a compatible local model server. Select the model and its supported reasoning effort. Within the same connection, changes apply to the next unsent request in running or resumed tasks, including queued requests and retries. In-flight requests retain their original settings; completed papers are not reprocessed. The task panel shows next-request settings separately from in-flight model/effort counts.
 - **Persistent work:** SQLite storage, identifier-based deduplication, backups, exports, per-paper checkpoints, pause/resume and recovery after interruption.
 - **English and Chinese:** switch the interface language and configure the summary language separately. Personal profile contains research scope, sources, schedule and AI connection.
@@ -109,18 +113,18 @@ For environment-based OpenAI credentials, set `OPENAI_API_KEY` in the environmen
 
 ## How historical selection works
 
-New searches default to focused discovery. Crossref combines citation-ranked and relevance-ranked candidates. Relevant papers qualify through a configurable citation threshold (default 100) or an abstract-supported foundational contribution. The default view and timeline show only shortlisted papers; other candidates remain available for review. Citation counts carry their source and observation date, and foundational labels remain candidates for expert verification. Existing saved searches are preserved. See [the selection rules](docs/RESEARCH_HISTORY.md).
+New topic searches default to focused discovery; author searches use verified authorship without the landmark restriction. Crossref combines citation-ranked and relevance-ranked candidates. Relevant papers qualify through a configurable citation threshold (default 100) or an abstract-supported foundational contribution. The default view and timeline show only shortlisted papers; other candidates remain available for review. Citation counts carry their source and observation date, and foundational labels remain candidates for expert verification. Existing saved searches are preserved. See [the selection rules](docs/RESEARCH_HISTORY.md).
 
 ## Data and upgrades
 
 - `data/academicupdater.sqlite3` stores your library, settings, research scopes, notes, analyses and historical searches.
-- `data/backups/` contains pre-collection database backups, at most one per UTC date.
+- `data/backups/` contains pre-collection database backups, with unique timestamps; clearing also creates a backup.
 - `data/credentials.dpapi` contains saved credentials encrypted for the current Windows user. It is excluded from library exports.
 - JSONL/CSV library exports are useful for data exchange; the SQLite database is the complete application backup.
 
 Before updating, stop the application and back up the complete `data/` folder. Replace the source files while preserving `data/`, then restart. Schema migrations retain existing papers, saved status, notes and analyses. Credentials copied to another computer or OS account may not be decryptable; reconnect there. Avoid running two versions against the same database.
 
-Interrupted collection/analysis jobs resume on startup. Jobs paused manually or at a usage limit require **Resume**. A request interrupted before its result was saved may be sent again; saved results are checkpointed.
+Interrupted collection/analysis jobs resume on startup. Manual pauses require **Resume**; daily-budget pauses retry after local midnight or an increased budget. A request interrupted before its result was saved may be sent again; saved results are checkpointed.
 
 The public repository intentionally contains no personal library, credentials or runtime logs. Use a separate data folder for experiments:
 
@@ -130,11 +134,11 @@ python run.py --port 8766 --data-dir ./work/dev-data --no-scheduler
 
 ## Coverage and limitations
 
-- Daily scheduling works while the application is running and the computer is awake. The default is 08:00 at a fixed UTC+10 offset; configure your own time and offset. No OS startup task is installed.
+- Daily scheduling works while the application is running and the computer is awake. The default is 08:00 at a fixed UTC+10 offset; configure your own time and offset. Windows login startup is optional in Personal profile.
 - AI works from titles and abstracts/descriptions, not full-text review. Assessments and timeline narratives need human checking; they do not prove historical priority.
 - “All matches” means results retrievable for the chosen queries and source limits, not every paper in a field. Broad queries may return weak matches; source limits and failures are displayed. The history overview uses up to 80 relevant papers sampled across publication years; all candidates and individual assessments remain saved.
 - Matching DOI, arXiv ID, source ID or canonical URL can reconcile records. Similar titles alone are not automatically merged.
-- Impact factors are user-supplied, year-specific values. Preprints and other inapplicable record types do not receive an inferred journal IF.
+- Impact factors require verified public evidence or a manual correction, and carry their metric year. Preprints and other inapplicable record types do not receive an inferred journal IF.
 - This is a local personal application, not a hosted multi-user service. Do not expose its port publicly without designing and reviewing an appropriate authentication and deployment layer.
 
 ## Contribute

@@ -23,4 +23,4 @@ main{margin:0 auto;align-self:start}.toolbar input[type=checkbox]{flex:none;min-
 
 .concurrency-dialog{width:min(530px,94vw);padding:25px}.concurrency-dialog .toolbar{justify-content:flex-end;margin-top:20px}.job-stack .section-label{flex-wrap:wrap}.job-parallel{margin-top:4px}
 
-.ss-body{padding:24px}.ss-body textarea{min-height:130px}.ss-body .toolbar{margin:12px 0}.ss-evidence{padding:12px 15px;background:var(--soft);border-radius:7px}.ss-samples{padding-left:22px}.ss-samples li{padding:8px 0;border-bottom:1px solid var(--line)}.ss-samples p{margin:5px 0}
+.data-management{margin-top:24px}.data-management .danger{margin-top:12px}.retrieval-editor{padding:16px;background:var(--soft);border-radius:8px;margin:16px 0}.identity-card{padding:15px;background:var(--soft);border-radius:8px;margin:12px 0}.data-clear-dialog{padding:26px;width:min(600px,94vw)}

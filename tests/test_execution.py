@@ -113,7 +113,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(self.store.job(job)['status'],'complete');self.assertEqual(len(set(seen)),6)
 
     def test_parallel_limit_validation_preserves_previous_setting(self):
-        for invalid in (0,9,'invalid'):
+        for invalid in (0,65,'invalid'):
             with self.assertRaises(AppError):self.service.save_settings({'ai_concurrency':invalid})
             self.assertEqual(self.store.settings()['ai_concurrency'],3)
     def test_history_batches_overlap_and_saved_assessments_are_not_repeated(self):
@@ -275,7 +275,7 @@ class SavedLearningTests(unittest.TestCase):
         self.add(1,True);self.ai.generate=Mock(side_effect=AppError('sign_in_again'));self.ai.analyze=Mock(side_effect=AppError('sign_in_again'))
         with patch('academic_updater.service.collect',return_value=([],False)) as collect:
             job=self.service.start_job('collect');self.wait()
-        self.assertEqual(collect.call_count,2);self.assertEqual(self.store.job(job)['progress']['profile_learning']['status'],'deferred');self.assertTrue(self.store.saved_scope_snapshot()['changed'])
+        self.assertEqual(collect.call_count,3);self.assertEqual(self.store.job(job)['progress']['profile_learning']['status'],'deferred');self.assertTrue(self.store.saved_scope_snapshot()['changed'])
 
 
 if __name__=='__main__':unittest.main()

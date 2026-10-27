@@ -17,7 +17,6 @@ from .network import AppError
 from .service import Service
 from .storage import Store,encode,now
 from .metadata import parse_metrics_csv
-from .scispace import research_question,HOME as SCISPACE_HOME
 from . import startup
 
 
@@ -33,9 +32,10 @@ class Application:
         learning=self.store.saved_scope_snapshot(include_papers=False)
         jobs=[self.store.job(i) for i in ids]
         for job in jobs:job['ai_state']=self.service.job_ai_state(job)
-        return {'app':'AcademicUpdater','version':__version__,'csrf':self.csrf,'settings':self.store.settings(),'profile':self.store.get('profile'),'sources':self.store.sources(),'stats':self.store.stats(),'auth':self.auth_status(),'capabilities':self.ai.capabilities(),'histories':self.service.history.list(),
+        return {'app':'AcademicUpdater','version':__version__,'csrf':self.csrf,'settings':self.store.settings(),'profile':self.store.get('profile'),'sources':[s for s in self.store.sources() if s['kind']!='scispace_import'],'stats':self.store.stats(),'auth':self.auth_status(),'capabilities':self.ai.capabilities(),'histories':self.service.history.list(),
                 'jobs':jobs,'execution':self.service.ai_limiter.state(),'startup':startup.status(),
                 'scheduler':self.store.get('scheduler_status',{}),'scheduled_day':self.store.get('scheduled_day'),'local_day':self.service.local_day(),
+                'journal_metrics_status':self.store.metric_status(),'journal_lookup_blocked':self.store.get('journal_lookup_blocked',{}),
                 'saved_learning':{'pending':learning['changed'],'count':learning['count']} if learning else None}
 
     def auth_status(self):
@@ -82,15 +82,6 @@ def make_server(app,port):
                 parsed=urllib.parse.urlsplit(self.path);path=parsed.path;q={k:v[0] for k,v in urllib.parse.parse_qs(parsed.query).items()}
                 if path=='/api/health':return self.json({'app':'AcademicUpdater','version':__version__})
                 if path=='/api/bootstrap':return self.json(app.bootstrap())
-                if path=='/api/scispace/context':
-                    if q.get('history_id'):
-                        try:hid=int(q['history_id'])
-                        except ValueError:raise AppError('invalid_setting')
-                        h=app.service.history.get(hid,False);scope=h['scope'];prompt=h['prompt']
-                    else:
-                        active=app.store.get('profile').get('active') or {};scope=active.get('understanding') or {};prompt=active.get('prompt','')
-                        if active.get('exclude'):prompt+='\nExplicit exclusions: '+active['exclude']
-                    return self.json({'question':research_question(scope,prompt,bool(q.get('history_id'))),'url':SCISPACE_HOME,'mode':'manual_import'})
                 if path=='/api/items':return self.json(app.store.items(q.get('q','')[:300],q.get('kind',''),q.get('saved')=='1',sort=q.get('sort','updated'),direction=q.get('direction'),daily=q.get('today')=='1',deleted=q.get('deleted')=='1' and q.get('today')!='1'))
                 if path=='/api/model-capabilities':return self.json(app.ai.capabilities({**app.store.settings(),'model':q.get('model',app.store.settings()['model'])}))
                 if path=='/api/histories':return self.json(app.service.history.list(deleted=q.get('deleted')=='1'))
@@ -101,6 +92,7 @@ def make_server(app,port):
                     if history_route[2]=='export':
                         return self.send(encode(h.get(hid)),'application/json; charset=utf-8',filename=f'AcademicUpdater-history-{hid}.json')
                     return self.json(h.get(hid,False))
+                if path=='/api/dataset':return self.json(app.store.dataset_counts())
                 if path=='/api/metrics':return self.json(app.store.metrics())
                 if path=='/api/metrics/template':return self.send('\ufeffjournal,year,impact_factor,source,issns,source_url\r\n','text/csv; charset=utf-8',filename='journal-impact-factors-template.csv')
                 if re.fullmatch(r'/api/items/\d+',path):return self.json(app.store.item(int(path.rsplit('/',1)[1])))
@@ -126,7 +118,7 @@ def make_server(app,port):
                     try:enabled=app.oauth.callback(q);app.oauth.last_error='' if enabled else 'subscription_not_authorized'
                     except AppError as exc:app.oauth.last_error=exc.code
                     self.send_response(303);self.send_header('Location','/#ai');self.send_header('Content-Length','0');self.send_header('Cache-Control','no-store');self.end_headers();return
-                files={'/logo.png':'logo.png','/':'index.html','/index.html':'index.html','/app.js':'app.js','/history.js':'history.js','/trash.js':'trash.js','/execution.js':'execution.js','/scispace.js':'scispace.js','/i18n.js':'i18n.js','/styles.css':'styles.css','/guide':'guide.html'}
+                files={'/logo.png':'logo.png','/':'index.html','/index.html':'index.html','/app.js':'app.js','/history.js':'history.js','/trash.js':'trash.js','/execution.js':'execution.js','/features.js':'features.js','/i18n.js':'i18n.js','/styles.css':'styles.css','/guide':'guide.html'}
                 if path not in files:raise AppError('not_found',status=404)
                 file=static/files[path]
                 content=file.read_bytes()
@@ -159,6 +151,8 @@ def make_server(app,port):
                     current=app.store.get('profile')
                     origin='ai' if current['origin']=='ai' and current['understanding']==u and current['understanding_revision']==body.get('revision') else 'manual'
                     return self.json(app.store.apply_profile(body.get('revision'),u,origin))
+                if path=='/api/dataset/clear':return self.json(app.service.clear_dataset(body.get('confirmation')))
+                if path=='/api/metrics/refresh':return self.json({'job_id':app.service.start_job('journal_metrics')})
                 if path=='/api/settings':return self.json(app.service.save_settings(body))
                 if path=='/api/startup':return self.json(startup.configure(bool(body.get('enabled'))))
                 if path=='/api/settings/key':
@@ -181,14 +175,13 @@ def make_server(app,port):
                 if path=='/api/import':
                     if body.get('kind','paper') not in ('paper','industry','conference'):raise AppError('invalid_source_type')
                     return self.json({'job_id':app.service.start_job('import',{'value':str(body.get('value','')).strip()[:4000],'kind':body.get('kind','paper')})})
-                if path in ('/api/scispace/preview','/api/scispace/import'):return self.json(app.service.scispace_import(body,preview=path.endswith('/preview')))
                 if path=='/api/sources':app.service.add_source(body);return self.json(app.store.sources())
                 if re.fullmatch(r'/api/sources/\d+',path):
                     source_id=int(path.rsplit('/',1)[1])
                     with app.store.db() as c:
                         source=c.execute('SELECT kind FROM sources WHERE id=?',(source_id,)).fetchone()
                         if not source:raise AppError('not_found',status=404)
-                        if source['kind']=='scispace_import' and body.get('enabled'):raise AppError('scispace_manual_source')
+                        if source['kind']=='scispace_import' and body.get('enabled'):raise AppError('invalid_source_type')
                         if 'enabled' in body:c.execute('UPDATE sources SET enabled=? WHERE id=?',(int(bool(body['enabled'])),source_id))
                         if 'query' in body:c.execute('UPDATE sources SET query=? WHERE id=?',(str(body['query']).strip()[:1000],source_id))
                     return self.json(app.store.sources())

@@ -8,6 +8,7 @@ import urllib.parse
 import xml.etree.ElementTree as ET
 from .network import AppError, request, get_json, plain, doi, arxiv_id, TextParser
 from .search_queries import arxiv_query,crossref_queries
+from .discovery import discovery_page,semantic_queries
 
 _arxiv_lock=threading.Lock()
 _arxiv_last=0.0
@@ -89,6 +90,18 @@ def collect(source,active,settings):
     if source.get('last_success'):
         try:since=min(since,dt.datetime.fromisoformat(source['last_success'])-dt.timedelta(days=2))
         except ValueError:pass
+    if source['kind']=='openalex':
+        rows=[];seen=set();limited=False
+        queries=[source['query']] if source.get('query') else semantic_queries(active['understanding'],active.get('prompt',''))
+        for index,q in enumerate(queries):
+            cap=min(50,limit//len(queries)+int(index<limit%len(queries)))
+            if not cap:limited=True;continue
+            found,state=discovery_page(q,{}, {'mode':'semantic','since':str(since.date())},cap)
+            limited=limited or state['source_limited']
+            for row in found:
+                key=row['doi'] or row['external_id']
+                if key not in seen:rows.append(row);seen.add(key)
+        return rows,limited
     if source['kind']=='crossref':
         variants=list(dict.fromkeys(v for q in queries for v in crossref_queries(q)))
         rows=[];seen=set();limited=len(variants)>limit

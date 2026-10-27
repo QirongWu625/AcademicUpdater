@@ -14,8 +14,16 @@ const context=vm.createContext({
   document:{addEventListener(){}},$:(selector)=>controls[selector],
   setTimeout,clearTimeout,structuredClone
 });
-for(const name of ['history.js','trash.js','execution.js','scispace.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'..','static',name),'utf8'),context);
+for(const name of ['history.js','trash.js','execution.js','features.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'..','static',name),'utf8'),context);
 vm.runInContext("const t=k=>COPY[k]?.[0]||k,esc=v=>String(v??''),btn=(a,l)=>'<button>'+t(l)+'</button>';",context);
+// Author scope survives omitted form controls and distinguishes empty topic constraints.
+const authorForm=new Map([['retrieval_mode','author'],['author_name','Luca Cocchi'],['author_institution','QIMR'],['author_topic','']]);
+context.authorForm=authorForm;
+let strategy=vm.runInContext("readRetrieval(authorForm,{retrieval:{mode:'topic',semantic_queries:['A real research question']}})",context);
+assert.equal(strategy.mode,'author');assert.equal(strategy.author_name,'Luca Cocchi');assert.equal(strategy.topic_constraint,'');
+assert.equal(vm.runInContext("resumable({kind:'journal_metrics',status:'paused'})",context),true);
+assert.match(fs.readFileSync(path.join(__dirname,'..','static','app.js'),'utf8'),/daily_ai_limit','dailyAI',s.daily_ai_limit,'number','min="0"/);
+assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'..','static','index.html'),'utf8'),/scispace/);
 (async()=>{
   // A periodic refresh may supersede the click's list request. Controls must
   // still reflect the requested filter instead of showing 'selected' over all rows.
@@ -76,7 +84,7 @@ vm.runInContext("const t=k=>COPY[k]?.[0]||k,esc=v=>String(v??''),btn=(a,l)=>'<bu
   controls['meta[name="academic-version"]'].content='1.6.1';
   assert.doesNotMatch(vm.runInContext('versionNotice()',context),/Save any unfinished edits/);
   vm.runInContext(`const textInput=(name,label,value,type,attrs)=>'<input name="'+name+'" value="'+value+'" '+attrs+'>';`,context);
-  html=vm.runInContext('concurrencyForm()',context);assert.match(html,/min="1" max="8"/);assert.match(html,/Apply now/);
+  html=vm.runInContext('concurrencyForm()',context);assert.match(html,/min="1" max="64"/);assert.match(html,/Apply now/);
   let closed=false,refreshed=false,saved;
   controls['#concurrency-dialog']={close(){closed=true}};
   controls['#schedule-form [name=ai_concurrency]']={value:'3'};
@@ -89,18 +97,5 @@ vm.runInContext("const t=k=>COPY[k]?.[0]||k,esc=v=>String(v??''),btn=(a,l)=>'<bu
   closed=false;refreshed=false;context.api=async()=>{throw new Error('offline')};
   await assert.rejects(vm.runInContext("saveConcurrency({ai_concurrency:'8'})",context),/offline/);
   assert.equal(closed,false);assert.equal(refreshed,false);assert.equal(vm.runInContext('S.boot.settings.ai_concurrency',context),6);
-  // A late question response must not overwrite the user's edits or target.
-  controls['#ss-target']={value:'1'};controls['#ss-question']={value:'my question'};
-  controls['#ss-preview']={innerHTML:'old preview'};controls['#ss-import']={disabled:false};controls['#scispace-dialog']={open:true};
-  let resolveQuestion;context.api=()=>new Promise(resolve=>{resolveQuestion=resolve});
-  const questionLoad=vm.runInContext('scispaceContext()',context);
-  vm.runInContext('invalidateSciSpace()',context);controls['#ss-question'].value='My edited question';
-  resolveQuestion({question:'stale generated question'});await questionLoad;
-  assert.equal(controls['#ss-question'].value,'My edited question');assert.equal(controls['#ss-import'].disabled,true);
-  // Repeated clicks while an import is active must not submit a second write.
-  let writes=0;context.api=async()=>{writes++};
-  vm.runInContext("SS.busy=true;SS.preview={content:'data'}",context);
-  await vm.runInContext('importSciSpace()',context);assert.equal(writes,0);
-  html=vm.runInContext('scispacePanel()',context);assert.match(html,/Manual import/);assert.match(html,/does not provide an API/);
-  console.log('UI state regression checks passed (filters, trash, parallel jobs, collection progress, SciSpace drafts and duplicate submissions).');
+  console.log('UI state regression checks passed (filters, trash, parallel jobs, collection progress, profile data controls).');
 })().catch(error=>{console.error(error);process.exitCode=1});

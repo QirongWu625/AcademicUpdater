@@ -12,7 +12,7 @@ Object.assign(COPY,{
   parallelApply:['Apply now','立即应用'],
   parallelCancel:['Cancel','取消'],
   parallelSaved:['Parallel limit saved. Running tasks use it immediately.','并发上限已保存，正在运行的任务立即采用新设置。'],
-  parallelHelp:['Choose 1–8 simultaneous AI requests, shared across all tasks. Raising this starts more queued work without restarting. Lowering it lets requests already in progress finish.','可设置 1–8 个同时进行的 AI 请求，所有任务共享。调高后会直接增加并行处理，无需重启；调低时，已开始的请求会先完成。'],
+  parallelHelp:['Choose 1–64 simultaneous AI requests, shared across all tasks. Raising this starts more queued work without restarting. Lowering it lets requests already in progress finish.','可设置 1–64 个同时进行的 AI 请求，所有任务共享。调高后会直接增加并行处理，无需重启；调低时，已开始的请求会先完成。'],
   parallelSpeed:['Results appear as each request finishes. Daily analysis handles one paper per request; history handles up to 10. Model response time and service limits also affect speed.','结果在各个请求完成后陆续显示。日常分析每个请求处理 1 篇，历史分析每个请求最多处理 10 篇。速度还取决于模型响应时间和服务方限制。'],
   parallelWaiting:['Waiting for an AI slot','等待 AI 请求名额'],
   parallelHistoryBatch:['Up to 10 papers per request','每个请求最多 10 篇'],
@@ -71,7 +71,7 @@ function focusCollection(id){
   $('#job-card-'+id)?.scrollIntoView({behavior:'smooth',block:'center'});
 }
 async function viewCollection(id){await refreshVisible();focusCollection(id)}
-function concurrencyForm(){return `<h2 id="parallel-title">${esc(t('parallelTitle'))}</h2><p class="small muted">${esc(t('parallelHelp'))}</p><form id="concurrency-form">${textInput('ai_concurrency','aiConcurrency',S.boot.settings.ai_concurrency||3,'number','min="1" max="8" step="1" required')}<p class="small muted">${esc(t('parallelSpeed'))}</p><div class="toolbar"><button type="button" data-action="close-concurrency">${esc(t('parallelCancel'))}</button><button class="primary" type="submit">${esc(t('parallelApply'))}</button></div></form>`}
+function concurrencyForm(){return `<h2 id="parallel-title">${esc(t('parallelTitle'))}</h2><p class="small muted">${esc(t('parallelHelp'))}</p><form id="concurrency-form">${textInput('ai_concurrency','aiConcurrency',S.boot.settings.ai_concurrency||3,'number','min="1" max="64" step="1" required')}<p class="small muted">${esc(t('parallelSpeed'))}</p><div class="toolbar"><button type="button" data-action="close-concurrency">${esc(t('parallelCancel'))}</button><button class="primary" type="submit">${esc(t('parallelApply'))}</button></div></form>`}
 function showConcurrency(){
   let dialog=$('#concurrency-dialog');
   if(!dialog){dialog=document.createElement('dialog');dialog.id='concurrency-dialog';dialog.className='concurrency-dialog';dialog.setAttribute('aria-labelledby','parallel-title');document.body.append(dialog)}
@@ -118,7 +118,7 @@ function poll(){
     finally{jobPollActive=false;if(runningJobs().length)poll()}
   },2000);
 }
-function resumable(r){return ['collect','analyze','history_plan','history_search','item_analysis','interpret'].includes(r.kind)&&(['paused','interrupted','failed'].includes(r.status)||(r.status==='partial'&&(r.result?.errors?.length||r.result?.analysis?.errors?.length)))}
+function resumable(r){return ['collect','analyze','history_plan','history_search','item_analysis','interpret','journal_metrics'].includes(r.kind)&&(['paused','interrupted','failed'].includes(r.status)||(r.status==='partial'&&(r.result?.errors?.length||r.result?.analysis?.errors?.length)))}
 function jobControls(r){const p=r.progress||{};return r.status==='running'?btn('pause-job','pauseJob',false,`data-id="${r.id}" ${p.pause_requested?'disabled':''}`):resumable(r)?btn('resume-job','resumeJob',false,`data-id="${r.id}" data-kind="${r.kind}"`):''}
 function jobInfo(r){
   const p=r.progress||{},q=r.queue||{};
@@ -137,7 +137,7 @@ function runHTML(r){
   const data=typeof r.result==='string'?JSON.parse(r.result):r.result||{};
   return `<details class="run"><summary>${esc(jobName(r))} <span class="badge">${esc(t(r.status))}</span> <span class="tiny muted">${esc(displayDate(r.started_at))}</span></summary><p class="small">${esc(jobInfo(r))}</p>${jobReason(r)}${jobControls(r)}${data.errors?.length?`<pre>${esc(data.errors.join('\n'))}</pre>`:''}${data.truncated?.length?`<p class="warning">${esc(t('limitedHelp'))}</p>`:''}${jobEvents(r)}</details>`;
 }
-function automationControls(){const s=S.boot.settings;return `<hr><h3>${esc(t('executionTitle'))}</h3>${textInput('ai_concurrency','aiConcurrency',s.ai_concurrency||3,'number','min="1" max="8" required')}<p class="small muted">${esc(t('concurrencyHelp'))}</p><label class="check"><input name="auto_resume" type="checkbox" ${s.auto_resume?'checked':''}>${esc(t('autoResume'))}</label><p class="small muted">${esc(t('autoResumeHelp'))}</p><label class="check"><input name="adapt_saved" type="checkbox" ${s.adapt_saved?'checked':''}>${esc(t('adaptSaved'))}</label><p class="small muted">${esc(t('adaptSavedHelp'))}</p>`}
+function automationControls(){const s=S.boot.settings;return `<hr><h3>${esc(t('executionTitle'))}</h3>${textInput('ai_concurrency','aiConcurrency',s.ai_concurrency||3,'number','min="1" max="64" required')}<p class="small muted">${esc(t('concurrencyHelp'))}</p><label class="check"><input name="auto_resume" type="checkbox" ${s.auto_resume?'checked':''}>${esc(t('autoResume'))}</label><p class="small muted">${esc(t('autoResumeHelp'))}</p><label class="check"><input name="adapt_saved" type="checkbox" ${s.adapt_saved?'checked':''}>${esc(t('adaptSaved'))}</label><p class="small muted">${esc(t('adaptSavedHelp'))}</p>`}
 function automationStatus(){return `<div class="automation-status">${S.boot.startup?.supported?`<label class="check"><input id="login-startup" type="checkbox" ${S.boot.startup.enabled?'checked':''}>${esc(t('loginStartup'))}</label>`:''}<p class="small muted">${esc(t('startupHelp'))}</p><p class="tiny muted">${esc(t('scheduledDay'))}: ${esc(S.boot.scheduled_day||'—')}<br>${esc(t('schedulerChecked'))}: ${esc(displayDate(S.boot.scheduler?.checked_at))}</p>${S.boot.scheduler?.error?`<p class="warning">${esc(errorText(S.boot.scheduler.error))}</p>`:''}</div>`}
 function learningStatus(){const active=S.boot.profile.active,l=active?.saved_learning,state=S.boot.saved_learning;if(!active)return '';return `<section id="learning-status" class="strip"><strong>${esc(t('adaptSaved'))}</strong><p class="small">${esc(t(!state?.count&&!l?.count?'learningEmpty':state?.pending?'learningPending':'learningCurrent'))}</p>${l?`<p class="tiny muted">${esc(t('learningEvidence'))}: ${l.count} / ${l.sample_count} · ${esc(displayDate(l.updated_at))}</p>`:''}${active.origin==='saved_feedback'?`<p class="small"><strong>${esc(translated(active.understanding,'field'))}</strong><br>${esc(translated(active.understanding,'rationale'))}</p>`:''}</section>`}
 document.addEventListener('change',async e=>{if(e.target.id!=='login-startup')return;const enabled=e.target.checked;try{S.boot.startup=await api('/api/startup',{enabled});notify(t('startupSaved'))}catch(err){e.target.checked=!enabled;fail(err)}});

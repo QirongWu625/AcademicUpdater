@@ -1,5 +1,15 @@
 # Changelog / 更新记录
 
+## 1.8.0 — 2026-10-27
+
+- Add OpenAlex embedding retrieval and author identity resolution, with editable interpreted strategy, per-work authorship checks, explicit coverage limits and unrestricted author bibliographies when requested.
+- Automatically queue new and existing missing journal IF. Use AI web search or fetched publisher pages; verify two-year JIF, metric year, journal identity and exact source evidence. Preserve manual corrections and show unavailable values honestly.
+- Add bilingual profile data-clear controls with typed confirmation, an idle-task barrier and a unique restorable backup. Preserve settings/credentials/usage, pause scheduling, and never clear data during upgrades.
+- Allow daily AI limit 0 (unlimited) and 1–64 shared parallel requests, with up to 16 independent jobs. Raising an exhausted budget makes paused work eligible for retry.
+- Remove SciSpace UI, routes and import implementation; preserve previously imported records and their provenance. Existing searches and assessments keep their original checkpoints.
+
+新增语义召回、作者身份检索、自动 IF 核验和带备份确认的数据清空入口；支持不限每日额度及最高 64 个共享并发请求；移除 SciSpace 功能并保留旧资料。
+
 ## 1.7.0 — 2026-10-27
 
 - Add bilingual SciSpace CSV/RIS/JSON preview and manual import into Library or a saved research history, with editable research questions and source provenance. Website/connector access is not presented as a standalone API integration.

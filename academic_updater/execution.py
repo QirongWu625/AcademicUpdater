@@ -3,7 +3,7 @@ import contextlib
 import threading
 import time
 
-BLOCKED={'daily_ai_limit','ai_not_connected','model_not_selected','subscription_not_authorized','sign_in_again','reasoning_not_supported'}
+BLOCKED={'daily_ai_limit','ai_not_connected','model_not_selected','subscription_not_authorized','sign_in_again','reasoning_not_supported','web_search_unavailable'}
 
 
 def transient(error):

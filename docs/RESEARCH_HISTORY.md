@@ -1,10 +1,18 @@
 # Influential and foundational papers / 高影响力与奠基性论文
 
-New searches default to **Focus on influential & foundational work**. Existing saved searches retain their previous scope, results and resume checkpoints. Copy an old search to create a new focused search.
+New topic searches default to **Focus on influential & foundational work**. Existing saved searches retain their previous scope, results and resume checkpoints. Copy an old search to create a new focused search.
 
-新检索默认聚焦高影响力与奠基性论文。旧检索保留原范围、结果和恢复进度；可复制旧检索，以新模式重新搜索。
+新主题检索默认聚焦高影响力与奠基性论文。旧检索保留原范围、结果和恢复进度；可复制旧检索，以新模式重新搜索。
+
+Author mode resolves the person by name, institution and optional ORCID, retrieves by author ID, and validates every authorship. No requested topic means no topic filter; earlier institutions are included. Ambiguous identities are not guessed.
+
+作者模式按姓名、机构与可选 ORCID 核对身份，按作者标识检索并逐条核对署名。不限定主题时不增加主题过滤，包含早期机构成果；同名无法消歧时不猜测。
 
 ## Retrieval / 获取候选
+
+OpenAlex uses title/abstract embeddings for natural-language descriptions (up to 50 results per description). It supplies observed citation counts, with explicit source caps and errors. Crossref/arXiv remain complementary text retrieval.
+
+OpenAlex 使用标题／摘要向量进行自然语言召回，每条描述最多 50 篇，保留实际引用数、来源上限及错误。Crossref／arXiv 提供补充文本检索。
 
 For Crossref, each query uses two independently checkpointed streams: citation-count order and relevance order. A finite per-source/per-query candidate limit is divided equally between them; duplicate records are reconciled. arXiv uses relevance order and supplies no citation count through this connector. Publication-year bounds apply to both sources.
 
@@ -14,10 +22,10 @@ Crossref 同时按引用量与相关性检索，每条检索保存独立进度�
 
 AI must first assess the paper as highly or moderately relevant to the saved field. It then needs at least one of:
 
-1. An observed Crossref citation count meeting the configured threshold (default **100**, editable).
+1. An observed OpenAlex or Crossref citation count meeting the configured threshold (default **100**, editable).
 2. An AI classification as a foundational candidate with an exact supporting quotation from the supplied abstract. A title-only quotation, publication age, journal IF or author reputation does not satisfy this rule.
 
-先由 AI 判断与领域高度相关或相关，再满足至少一个条件：Crossref 实际引用数达到可编辑门槛（默认 100），或被判断为奠基性候选且有摘要中的直接引文支持。仅凭标题、年份、期刊 IF 或作者声望不能满足奠基性规则。
+先由 AI 判断与领域高度相关或相关，再满足至少一个条件：OpenAlex 或 Crossref 实际引用数达到可编辑门槛（默认 100），或被判断为奠基性候选且有摘要中的直接引文支持。仅凭标题、年份、期刊 IF 或作者声望不能满足奠基性规则。
 
 Counts, provider, observation date and source link are stored with the search snapshot. The model cannot supply or overwrite citation counts. Missing citation data stays missing, rather than becoming zero. A relevant paper meeting a citation threshold is a candidate for influence, not a proven landmark. The foundation label remains a candidate requiring specialist review; an abstract quotation supports the described contribution, not the whole historical influence claim.
 

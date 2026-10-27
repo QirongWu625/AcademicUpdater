@@ -18,7 +18,7 @@ def encode(value):
     return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
 
 
-DEFAULT_SETTINGS = {'language': 'en', 'summary_language': 'auto', 'provider': 'subscription', 'model': '', 'reasoning_effort':'default', 'local_url': 'http://127.0.0.1:11434/v1', 'daily_ai_limit': 30, 'daily_digest_limit': 10, 'schedule_enabled': True, 'schedule_time': '08:00', 'utc_offset': 10, 'lookback_days': 14, 'max_per_source': 100, 'ai_concurrency':3, 'auto_resume':True, 'adapt_saved':True}
+DEFAULT_SETTINGS = {'language': 'en', 'summary_language': 'auto', 'provider': 'subscription', 'model': '', 'reasoning_effort':'default', 'local_url': 'http://127.0.0.1:11434/v1', 'daily_ai_limit': 30, 'daily_digest_limit': 10, 'schedule_enabled': True, 'schedule_time': '08:00', 'utc_offset': 10, 'lookback_days': 14, 'max_per_source': 100, 'ai_concurrency':3, 'auto_resume':True, 'adapt_saved':True,'auto_if':True}
 EMPTY_PROFILE = {'topic': '', 'prompt': '', 'exclude': '', 'revision': 0, 'understanding': None, 'understanding_revision': None, 'origin': None, 'active': None}
 
 
@@ -44,6 +44,7 @@ class Store:
             CREATE INDEX IF NOT EXISTS items_updated ON items(updated_at DESC);
             CREATE INDEX IF NOT EXISTS analyses_item ON analyses(item_id,profile_version);
             CREATE TABLE IF NOT EXISTS journal_metrics(id INTEGER PRIMARY KEY,journal TEXT NOT NULL,journal_key TEXT NOT NULL,issns TEXT NOT NULL DEFAULT '[]',year INTEGER NOT NULL,impact_factor REAL NOT NULL,source TEXT NOT NULL,source_url TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL,UNIQUE(journal_key,year));
+            CREATE TABLE IF NOT EXISTS journal_lookups(journal_key TEXT PRIMARY KEY,journal TEXT NOT NULL,issns TEXT NOT NULL DEFAULT '[]',status TEXT NOT NULL DEFAULT 'pending',error TEXT NOT NULL DEFAULT '',evidence TEXT NOT NULL DEFAULT '{}',updated_at TEXT NOT NULL,retry_at TEXT);
             CREATE TABLE IF NOT EXISTS analysis_tasks(id INTEGER PRIMARY KEY,run_id INTEGER NOT NULL REFERENCES runs(id),item_id INTEGER NOT NULL REFERENCES items(id),version_id INTEGER NOT NULL,profile_version INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,error TEXT,updated_at TEXT NOT NULL,UNIQUE(run_id,item_id));
             ''')
             c.executescript("""
@@ -58,6 +59,9 @@ class Store:
             c.execute("INSERT OR IGNORE INTO kv VALUES('profile',?)", (encode(EMPTY_PROFILE),))
             if not c.execute('SELECT 1 FROM sources LIMIT 1').fetchone():
                 c.executemany('INSERT INTO sources(kind,name,url) VALUES(?,?,?)', [('crossref','Crossref','https://api.crossref.org/works'),('arxiv','arXiv','https://export.arxiv.org/api/query')])
+            if not c.execute("SELECT 1 FROM sources WHERE kind='openalex'").fetchone():c.execute("INSERT INTO sources(kind,name,url) VALUES('openalex','OpenAlex · semantic discovery','https://api.openalex.org/works')")
+            c.execute("UPDATE sources SET enabled=0 WHERE kind='scispace_import'")
+            c.execute("INSERT OR IGNORE INTO journal_lookups(journal_key,journal,issns,updated_at) SELECT journal_key,journal,issns,? FROM items i WHERE deleted_at IS NULL AND venue_type='journal' AND journal_key<>'' AND NOT EXISTS(SELECT 1 FROM journal_metrics m WHERE m.journal_key=i.journal_key) GROUP BY journal_key",(now(),))
             # A terminated process must never leave a job looking active forever.
             c.execute("INSERT INTO run_events(run_id,at,event,detail) SELECT id,?,'interrupted','process_exit_or_shutdown' FROM runs WHERE status='running'",(now(),))
             c.execute("UPDATE runs SET status='interrupted',finished_at=?,error='Application stopped before this run completed.' WHERE status='running'", (now(),))
@@ -65,6 +69,9 @@ class Store:
             c.execute("UPDATE ai_usage SET status='interrupted' WHERE status='started'")
 
     def _migrate(self,c):
+        metric_columns={r['name'] for r in c.execute('PRAGMA table_info(journal_metrics)')}
+        for name,definition in [('origin',"TEXT NOT NULL DEFAULT 'manual'"),('evidence_quote',"TEXT NOT NULL DEFAULT ''")]:
+            if name not in metric_columns:c.execute(f'ALTER TABLE journal_metrics ADD COLUMN {name} {definition}')
         for table in ('items','histories'):
             if 'deleted_at' not in {r['name'] for r in c.execute(f'PRAGMA table_info({table})')}:
                 c.execute(f'ALTER TABLE {table} ADD COLUMN deleted_at TEXT')
@@ -275,6 +282,7 @@ class Store:
             if not older:
                 if current['journal'] and not meta['journal']:meta['venue_type']='unknown'
                 c.execute("UPDATE items SET journal=CASE WHEN ?<>'' THEN ? ELSE journal END,journal_key=CASE WHEN ?<>'' THEN ? ELSE journal_key END,issns=CASE WHEN ?<>'[]' THEN ? ELSE issns END,venue_type=CASE WHEN ?<>'unknown' THEN ? ELSE venue_type END,author_sort=CASE WHEN ?<>'' THEN ? ELSE author_sort END WHERE id=?",(meta['journal'],meta['journal'],meta['journal_key'],meta['journal_key'],encode(meta['issns']),encode(meta['issns']),meta['venue_type'],meta['venue_type'],meta['author_sort'],meta['author_sort'],item_id))
+            c.execute("INSERT OR IGNORE INTO journal_lookups(journal_key,journal,issns,updated_at) SELECT journal_key,journal,issns,? FROM items i WHERE id=? AND kind='paper' AND venue_type='journal' AND journal_key<>'' AND NOT EXISTS(SELECT 1 FROM journal_metrics m WHERE m.journal_key=i.journal_key)",(stamp,item_id))
             return {'id':item_id,'new':is_new,'updated':bool(changed and primary),'duplicate':not is_new and not changed}
 
     def items(self, query='', kind='', saved=False, limit=300, sort='updated',direction=None,daily=False,deleted=False):
@@ -322,11 +330,32 @@ class Store:
     def metrics(self):
         with self.db() as c:return [{**dict(r),'issns':json.loads(r['issns'])} for r in c.execute('SELECT * FROM journal_metrics ORDER BY year DESC,id DESC')]
 
-    def save_metrics(self,rows):
+    def metric_status(self):
+        with self.db() as c:return {r['status']:r['n'] for r in c.execute('SELECT status,COUNT(*) n FROM journal_lookups GROUP BY status')}
+
+    def dataset_counts(self):
+        with self.db() as c:return {t:c.execute('SELECT COUNT(*) FROM '+t).fetchone()[0] for t in ('items','histories','analyses','journal_metrics')}
+
+    def clear_dataset(self):
+        # Caller holds the worker registry guard. A failed backup leaves data intact.
+        backup=self.backup();counts=self.dataset_counts()
+        with self.db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            for table in ('history_items','analysis_tasks','run_events','analyses','versions','source_records','identifiers','delivered','digests','histories','runs','items','journal_metrics','journal_lookups'):c.execute('DELETE FROM '+table)
+            c.execute("UPDATE sources SET last_success=NULL,last_status=NULL,last_error=NULL")
+            settings=json.loads(c.execute("SELECT value FROM kv WHERE key='settings'").fetchone()[0]);settings['schedule_enabled']=False
+            c.execute("UPDATE kv SET value=? WHERE key='settings'",(encode(settings),))
+            c.execute("DELETE FROM kv WHERE key IN ('scheduled_day','scheduler_status','journal_lookup_blocked') OR key LIKE 'interpretation:%'")
+            profile=json.loads(c.execute("SELECT value FROM kv WHERE key='profile'").fetchone()[0])
+            if profile.get('active'):profile['active'].pop('saved_learning',None)
+            c.execute("UPDATE kv SET value=? WHERE key='profile'",(encode(profile),))
+        return {'cleared':counts,'backup':backup.name,'schedule_paused':True}
+
+    def save_metrics(self,rows,automatic=False):
         validated=[validate_metric(row) for row in rows]
         with self.db() as c:
-            for m in validated:
-                c.execute('INSERT INTO journal_metrics(journal,journal_key,issns,year,impact_factor,source,source_url,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(journal_key,year) DO UPDATE SET journal=excluded.journal,issns=excluded.issns,impact_factor=excluded.impact_factor,source=excluded.source,source_url=excluded.source_url,updated_at=excluded.updated_at',(m['journal'],m['journal_key'],encode(m['issns']),m['year'],m['impact_factor'],m['source'],m['source_url'],now()))
+            for m,original in zip(validated,rows):
+                c.execute('INSERT INTO journal_metrics(journal,journal_key,issns,year,impact_factor,source,source_url,updated_at,origin,evidence_quote) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(journal_key,year) DO UPDATE SET journal=excluded.journal,issns=excluded.issns,impact_factor=excluded.impact_factor,source=excluded.source,source_url=excluded.source_url,updated_at=excluded.updated_at,origin=excluded.origin,evidence_quote=excluded.evidence_quote WHERE ?=0 OR journal_metrics.origin=\'automatic\'',(m['journal'],m['journal_key'],encode(m['issns']),m['year'],m['impact_factor'],m['source'],m['source_url'],now(),'automatic' if automatic else 'manual',str(original.get('evidence_quote',''))[:1600] if automatic else '',int(automatic)))
         return len(validated)
 
     def pending_items(self,profile_version):
@@ -372,7 +401,7 @@ class Store:
         with self.db() as c:
             c.execute('BEGIN IMMEDIATE')
             count=c.execute('SELECT COUNT(*) FROM ai_usage WHERE day=?',(day,)).fetchone()[0]
-            if count>=s['daily_ai_limit']:raise AppError('daily_ai_limit',status=429)
+            if s['daily_ai_limit'] and count>=s['daily_ai_limit']:raise AppError('daily_ai_limit',status=429)
             return c.execute("INSERT INTO ai_usage(day,task,status,created_at) VALUES(?,?,'started',?)",(day,task,now())).lastrowid
 
     def finish_ai(self,usage_id,status):
@@ -380,7 +409,7 @@ class Store:
 
     def backup(self):
         folder=self.directory/'backups';folder.mkdir(exist_ok=True)
-        destination=folder/(now()[:10]+'.sqlite3')
+        destination=folder/(dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')+'.sqlite3')
         with contextlib.closing(sqlite3.connect(self.path)) as source, contextlib.closing(sqlite3.connect(destination)) as target:
             source.backup(target)
         return destination

@@ -12,7 +12,7 @@ from .ai import EFFORTS
 from .history import History,HISTORY_KINDS
 from .execution import AILimiter,BLOCKED,transient
 from .ai import PROFILE_SCHEMA,validate_scope
-from .scispace import parse_export,HOME as SCISPACE_HOME
+from .journal_lookup import JournalLookup
 
 class JobPaused(Exception):
     def __init__(self,code='paused_by_user'):self.code=code
@@ -25,7 +25,7 @@ class Service:
         self.digest_lock=threading.Lock();self.profile_lock=threading.Lock();self.item_locks={}
         self.request_guard=threading.Lock();self.ai_requests={}
         self.ai_limiter=AILimiter(lambda:self.store.settings()['ai_concurrency'])
-        self.history=History(self)
+        self.history=History(self);self.journals=JournalLookup(self)
 
     def group(self,kind,argument):
         if kind=='collect':return (kind,(argument or {}).get('day'))
@@ -46,7 +46,7 @@ class Service:
     def _claim(self,kind,argument):
         group=self.group(kind,argument)
         if any(w['group']==group for w in self.workers.values()):raise AppError('job_already_running',status=409)
-        if len(self.workers)>=8:raise AppError('too_many_jobs',status=409)
+        if len(self.workers)>=16:raise AppError('too_many_jobs',status=409)
         if not self.workers and not self.lock.acquire(False):raise AppError('job_already_running',status=409)
         return group
 
@@ -75,7 +75,7 @@ class Service:
 
     def resume(self,job,automatic=False):
         row=self.store.job(job)
-        if row['kind'] not in ('collect','analyze','item_analysis','interpret',*HISTORY_KINDS) or row['status'] not in ('interrupted','paused','partial','failed'):raise AppError('job_not_resumable')
+        if row['kind'] not in ('collect','analyze','item_analysis','interpret','journal_metrics',*HISTORY_KINDS) or row['status'] not in ('interrupted','paused','partial','failed'):raise AppError('job_not_resumable')
         with self.guard:
             argument=row['argument'];progress=row['progress']
             if row['kind']=='collect' and argument and argument.get('input') is None:
@@ -107,7 +107,7 @@ class Service:
 
     def recover_interrupted(self):
         if not self.store.settings()['auto_resume']:return
-        with self.store.db() as c:rows=c.execute("SELECT id,progress FROM runs WHERE kind IN ('collect','analyze','item_analysis','interpret','history_plan','history_search') AND status='interrupted' AND (kind NOT IN ('history_plan','history_search') OR EXISTS(SELECT 1 FROM histories h WHERE h.id=json_extract(runs.argument,'$.input') AND h.deleted_at IS NULL)) ORDER BY CASE kind WHEN 'collect' THEN 0 ELSE 1 END,id").fetchall()
+        with self.store.db() as c:rows=c.execute("SELECT id,progress FROM runs WHERE kind IN ('collect','analyze','item_analysis','interpret','history_plan','history_search','journal_metrics') AND status='interrupted' AND (kind NOT IN ('history_plan','history_search') OR EXISTS(SELECT 1 FROM histories h WHERE h.id=json_extract(runs.argument,'$.input') AND h.deleted_at IS NULL)) ORDER BY CASE kind WHEN 'collect' THEN 0 ELSE 1 END,id").fetchall()
         for row in rows:
             if json.loads(row['progress']).get('pause_requested'):
                 with self.store.db() as c:c.execute("UPDATE runs SET status='paused',error='paused_by_user' WHERE id=?",(row['id'],))
@@ -187,7 +187,7 @@ class Service:
 
     def parallel_work(self,job,entries,work):
         entries=iter(entries);pending=set();failure=None
-        with ThreadPoolExecutor(max_workers=8,thread_name_prefix='assessment') as pool:
+        with ThreadPoolExecutor(max_workers=64,thread_name_prefix='assessment') as pool:
             exhausted=False
             while pending or not exhausted:
                 try:
@@ -231,6 +231,7 @@ class Service:
                 result=self.store.job(job)['progress'].get('collection',{})
                 result['analysis']=self._analyze_queue(job,payload)
             elif kind=='analyze':result=self._analyze_queue(job,payload)
+            elif kind=='journal_metrics':result=self.journals.run(job,payload['settings'])
             elif kind=='history_plan':result=self.ai_call(job,lambda effective:self.history.plan(payload['input'],effective),payload['settings'])
             elif kind=='history_search':result=self.history.search(payload['input'],payload['settings'],job)
             elif kind=='interpret':result={'profile':self.ai_call(job,lambda effective:self.ai.interpret(payload['input'],settings=effective),payload['settings'])}
@@ -322,7 +323,7 @@ class Service:
                 for record in records:
                     self._check_pause(job)
                     try:
-                        info=self.store.ingest(source['id'],record)
+                        info=self.store.ingest(source['id'],record,preserve_metadata=source['kind']=='openalex')
                         result['new']+=int(info['new']);result['updated']+=int(info['updated']);result['duplicates']+=int(info['duplicate'])
                     except AppError as exc:result['errors'].append(source['name']+': '+exc.code)
                 if truncated:
@@ -398,7 +399,7 @@ class Service:
     def scheduler(self):
         while not self.stop.is_set():
             try:
-                self.schedule_tick();self.recover_interrupted();self.retry_tick()
+                self.schedule_tick();self.recover_interrupted();self.retry_tick();self.metrics_tick()
                 self.store.put('scheduler_status',{'checked_at':now(),'error':None})
             except Exception as exc:
                 try:self.store.put('scheduler_status',{'checked_at':now(),'error':exc.code if isinstance(exc,AppError) else type(exc).__name__})
@@ -433,6 +434,27 @@ class Service:
             self.store.put('scheduled_day',day)
             if isinstance(job,int):self._checkpoint(job,scheduled_day=day)
 
+    def metrics_tick(self):
+        s=self.store.settings()
+        if not s['auto_if'] or not s['model']:return
+        with self.guard:
+            if any(w['group'][0]=='journal_metrics' for w in self.workers.values()):return
+            with self.store.db() as c:
+                latest=c.execute("SELECT status,progress,error FROM runs WHERE kind='journal_metrics' ORDER BY id DESC LIMIT 1").fetchone()
+            # A pause is an explicit barrier, including authentication and quota
+            # failures. Resume through the ordinary retry/manual-resume flow.
+            if latest and latest['status'] in ('paused','interrupted','failed'):return
+            if not self.journals.pending(1):return
+            try:self.start_job('journal_metrics')
+            except AppError as e:
+                if e.code not in ('job_already_running','too_many_jobs'):raise
+
+    def clear_dataset(self,confirmation):
+        if confirmation!='CLEAR ALL':raise AppError('clear_confirmation_required')
+        with self.guard:
+            if self.workers or self.lock.locked():raise AppError('clear_jobs_running',status=409)
+            return self.store.clear_dataset()
+
     def add_source(self,body):
         kind=body.get('kind')
         if kind not in ('paper','industry','conference'):raise AppError('invalid_source_type')
@@ -442,54 +464,12 @@ class Service:
             if c.execute('SELECT 1 FROM sources WHERE url=?',(url,)).fetchone():raise AppError('source_exists',status=409)
             c.execute('INSERT INTO sources(kind,name,url) VALUES(?,?,?)',(kind,name,url))
 
-    def scispace_import(self,body,preview=False):
-        parsed=parse_export(body.get('content',''),body.get('format','auto'))
-        question=str(body.get('question') or parsed['question']).strip()[:6000]
-        try:hid=int(body['history_id']) if body.get('history_id') not in (None,'') else None
-        except (ValueError,TypeError):raise AppError('invalid_setting')
-        h=self.history.get(hid,False) if hid is not None else None
-        def outside_year(record):
-            if not h or not (h['config']['year_from'] or h['config']['year_to']):return False
-            date=record.get('published_at') or ''
-            if not re.match(r'^\d{4}',date):return True
-            year=int(date[:4]);return bool((h['config']['year_from'] and year<h['config']['year_from']) or (h['config']['year_to'] and year>h['config']['year_to']))
-        excluded=sum(outside_year(r) for r in parsed['records'])
-        if preview:return {'count':len(parsed['records']),'skipped_rows':parsed['skipped_rows'],'question':question,
-                           'outside_year':excluded,
-                           'sample':[{k:r[k] for k in ('title','authors','journal','doi','published_at')} for r in parsed['records'][:8]]}
-        counts={'new':0,'updated':0,'duplicates':0,'trashed':0,'history_added':0,'outside_year':excluded,'errors':[],'skipped_rows':parsed['skipped_rows']}
-        with self.guard:
-            if hid is not None:
-                if any(w['group']==('history',hid) for w in self.workers.values()):raise AppError('scispace_history_busy',status=409)
-                h=self.history.get(hid,False)
-                if not h['scope'].get('queries') or not (h['scope'].get('field_en') or h['scope'].get('field_zh')):raise AppError('history_scope_required')
-            with self.store.db() as c:
-                row=c.execute("SELECT id FROM sources WHERE kind='scispace_import' LIMIT 1").fetchone()
-                source_id=row['id'] if row else c.execute("INSERT INTO sources(kind,name,url,enabled) VALUES('scispace_import','SciSpace',?,0)",(SCISPACE_HOME,)).lastrowid
-            for index,record in enumerate(parsed['records'],1):
-                if outside_year(record):continue
-                record['raw_metadata'].update(search_question=question,imported_at=now())
-                try:info=self.store.ingest(source_id,record,historical=hid is not None,preserve_metadata=True)
-                except AppError as exc:counts['errors'].append({'row':index,'error':exc.code});continue
-                if info.get('deleted'):counts['trashed']+=1;continue
-                for key,field in (('new','new'),('updated','updated'),('duplicates','duplicate')):counts[key]+=int(info[field])
-                if hid is not None:
-                    item=self.store.item(info['id']);snapshot={k:item[k] for k in ('id','kind','title','abstract','url','authors','published_at','journal','journal_key','issns','venue_type','current_version')}
-                    snapshot['discovery_source']='SciSpace import'
-                    with self.store.db() as c:
-                        counts['history_added']+=c.execute('INSERT OR IGNORE INTO history_items(history_id,item_id,version_id,snapshot) VALUES(?,?,?,?)',(hid,item['id'],item['current_version'],encode(snapshot))).rowcount
-            if hid is not None and counts['history_added']:
-                progress=h['progress'];progress.setdefault('streams',[]);progress['search_started']=True
-                progress.setdefault('imports',[]).append({'source':'SciSpace','question':question,'count':counts['history_added'],'at':now()})
-                self.history.update(hid,progress=progress,report={},status='paused',error='')
-            self.store.source_status(source_id,'ok')
-        return {**counts,'history_id':hid,'question':question}
-
     def save_settings(self,body):
         s=self.store.settings()
+        old_daily_limit=s['daily_ai_limit']
         if any(k in body and body[k]!=s[k] for k in ('model','provider','local_url')):s['reasoning_effort']='default'
         enums={'language':['zh-CN','en'],'summary_language':['auto','zh-CN','en'],'provider':['subscription','api','local'],'reasoning_effort':['default',*EFFORTS]}
-        bounds={'daily_ai_limit':(1,500),'daily_digest_limit':(1,50),'utc_offset':(-12,14),'lookback_days':(1,365),'max_per_source':(1,200),'ai_concurrency':(1,8)}
+        bounds={'daily_ai_limit':(0,2147483647),'daily_digest_limit':(1,50),'utc_offset':(-12,14),'lookback_days':(1,365),'max_per_source':(1,200),'ai_concurrency':(1,64)}
         for key,allowed in enums.items():
             if key in body:
                 if body[key] not in allowed:raise AppError('invalid_setting')
@@ -504,9 +484,15 @@ class Service:
             try:dt.datetime.strptime(body['schedule_time'],'%H:%M')
             except (ValueError,TypeError):raise AppError('invalid_setting')
             s['schedule_time']=body['schedule_time']
-        for key in ('schedule_enabled','auto_resume','adapt_saved'):
+        for key in ('schedule_enabled','auto_resume','adapt_saved','auto_if'):
             if key in body:s[key]=bool(body[key])
         if 'model' in body:s['model']=str(body['model']).strip()[:120]
         if 'local_url' in body:s['local_url']=validate_url(str(body['local_url']).strip().rstrip('/'),local=True)
         self.ai.check_effort(s)
-        self.store.put('settings',s);return s
+        self.store.put('settings',s)
+        if s['daily_ai_limit']!=old_daily_limit and (s['daily_ai_limit']==0 or old_daily_limit and s['daily_ai_limit']>old_daily_limit):
+            with self.store.db() as c:
+                for row in c.execute("SELECT id,progress FROM runs WHERE status='paused' AND error LIKE 'daily_ai_limit%'").fetchall():
+                    progress=json.loads(row['progress'])
+                    if not progress.get('pause_requested'):progress['retry_at']=now();c.execute('UPDATE runs SET progress=? WHERE id=?',(encode(progress),row['id']))
+        return s

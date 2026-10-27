@@ -63,7 +63,7 @@ def response_text(response):
     return ''.join(text)
 
 
-def parse_stream(response):
+def parse_stream(response,with_response=False):
     chunks=[];completed=None;size=0;event=[]
     with response:
         for line in response:
@@ -82,7 +82,8 @@ def parse_stream(response):
             elif e.get('type')=='response.completed':completed=e.get('response',{});break
             elif e.get('type') in ('response.failed','response.incomplete','error'):raise AppError('ai_request_failed','The AI response did not complete.',502)
     if completed is None:raise AppError('ai_stream_interrupted',status=502)
-    return response_text(completed) or ''.join(chunks)
+    text=response_text(completed) or ''.join(chunks)
+    return (text,completed) if with_response else text
 
 
 class AI:
@@ -119,10 +120,11 @@ class AI:
         effort=s.get('reasoning_effort','default')
         if effort!='default' and effort not in self.capabilities(s)['levels']:raise AppError('reasoning_not_supported')
 
-    def generate(self,task,instructions,payload,spec,settings=None):
+    def generate(self,task,instructions,payload,spec,settings=None,web_search=False):
         s,token=self.credentials(settings)
         if not s['model']:raise AppError('model_not_selected')
         self.check_effort(s)
+        if web_search and s['provider']=='local':raise AppError('web_search_unavailable')
         usage=self.store.reserve_ai(task)
         try:
             if s['provider']=='local':
@@ -133,10 +135,19 @@ class AI:
             else:
                 body={'model':s['model'],'instructions':instructions,'input':[{'role':'user','content':encode(payload)}],'store':False,'stream':True,'text':{'format':{'type':'json_schema','name':'academic_'+task,'schema':spec,'strict':True}}}
                 if s.get('reasoning_effort','default')!='default':body['reasoning']={'effort':s['reasoning_effort']}
+                if web_search:
+                    body.update(tools=[{'type':'web_search'}],tool_choice='required',include=['web_search_call.action.sources'])
                 response=request('https://api.openai.com/v1/responses',data=encode(body).encode(),headers={'Content-Type':'application/json','Authorization':'Bearer '+token},stream=True,timeout=600)
-                text=parse_stream(response)
+                if web_search:text,web_response=parse_stream(response,with_response=True)
+                else:text=parse_stream(response)
             text=re.sub(r'^```(?:json)?\s*|\s*```$','',text.strip())
             result=validate(json.loads(text),spec)
+            if web_search:
+                calls=[x for x in web_response.get('output',[]) if x.get('type')=='web_search_call' and x.get('status')=='completed']
+                if not calls:raise AppError('web_search_unavailable')
+                urls={s.get('url') for call in calls for s in call.get('action',{}).get('sources',[]) if s.get('url')}
+                urls.update(a['url'] for x in web_response.get('output',[]) for part in x.get('content',[]) for a in part.get('annotations',[]) if a.get('type')=='url_citation' and a.get('url'))
+                result['_web_sources']=sorted(urls)
             self.store.finish_ai(usage,'completed');return result
         except AppError:
             self.store.finish_ai(usage,'failed');raise
