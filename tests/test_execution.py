@@ -84,6 +84,38 @@ class ExecutionTests(unittest.TestCase):
             a=self.service.start_job('history_search',hid);self.assertTrue(started.wait(2));self.service.pause(a)
             b=self.service.start_job('collect');release.set();self.wait()
         self.assertEqual(self.store.job(a)['status'],'paused');self.assertEqual(self.store.job(b)['status'],'complete')
+
+    def test_live_concurrency_increases_and_reduction_drains_existing_requests(self):
+        ids=[self.add(i) for i in range(1,7)];gates={i:threading.Event() for i in ids};seen=[];condition=threading.Condition()
+        self.service.save_settings({'ai_concurrency':1})
+        def analyze(item_id,**kw):
+            with condition:seen.append(item_id);condition.notify_all()
+            gates[item_id].wait(20)
+            return save_analysis(self.store,item_id,profile=kw['profile'],settings=kw['settings'])
+        def wait_started(count):
+            with condition:self.assertTrue(condition.wait_for(lambda:len(seen)>=count,10))
+        self.ai.analyze=analyze
+        try:
+            job=self.service.start_job('analyze');wait_started(1)
+            self.service.save_settings({'ai_concurrency':4});wait_started(4)
+            self.assertEqual(self.service.ai_limiter.state()['by_job'][job],4)
+            self.service.save_settings({'ai_concurrency':1})
+            self.assertEqual(self.service.ai_limiter.state()['active'],4)
+            for item in seen[:3]:gates[item].set()
+            end=time.monotonic()+10
+            while self.service.ai_limiter.state()['active']>1 and time.monotonic()<end:time.sleep(.02)
+            self.assertEqual(self.service.ai_limiter.state()['active'],1);self.assertEqual(len(seen),4)
+            gates[seen[3]].set();wait_started(5)
+            self.assertEqual(self.service.ai_limiter.state()['active'],1);self.assertEqual(len(seen),5)
+        finally:
+            for gate in gates.values():gate.set()
+            self.wait()
+        self.assertEqual(self.store.job(job)['status'],'complete');self.assertEqual(len(set(seen)),6)
+
+    def test_parallel_limit_validation_preserves_previous_setting(self):
+        for invalid in (0,9,'invalid'):
+            with self.assertRaises(AppError):self.service.save_settings({'ai_concurrency':invalid})
+            self.assertEqual(self.store.settings()['ai_concurrency'],3)
     def test_history_batches_overlap_and_saved_assessments_are_not_repeated(self):
         hid=self.history();started=threading.Event();release=threading.Event();guard=threading.Lock();active=0;maximum=0;seen=[]
         original=self.ai.generate

@@ -6,11 +6,11 @@
 
 An AI-powered, local-first research assistant for tracking papers and industry updates, discovering influential and foundational work, and organizing a deduplicated personal library.
 
-**Version 1.6.1 · MIT license · Contributions welcome**
+**Version 1.6.2 · MIT license · Contributions welcome**
 
 ## Automatic updates and parallel work
 
-Daily updates and independent history searches can run together. Paper assessment shares a fair limit of **3 concurrent AI requests**, adjustable from 1 to 8 in **Personal profile → Sources & schedule**. History processes up to 10 papers per request. Each task has its own pause/resume control; completed results are retained. Up to 8 independent jobs can be active. Model speed, reasoning effort, provider limits and the existing daily request budget still apply.
+Daily updates and independent history searches can run together. Paper assessment defaults to **3 concurrent AI requests**, shared across all tasks. Click **Set parallelism** beside active tasks or in **Personal profile → AI connection** to choose 1–8 while tasks keep running. The task panel shows actual active requests per task and total waiting requests. The original setting also remains in **Sources & schedule**. Raising the limit admits more requests immediately; lowering it lets in-flight requests finish. History processes up to 10 papers per request. Each task has its own pause/resume control; completed results are retained. Up to 8 independent jobs can be active. Model speed, reasoning effort, provider limits and the existing daily request budget still apply.
 
 Enable **Windows login startup** to launch in the background after signing in. The scheduler catches up that day's missed update after the configured time, and the next day's collection can start while an older analysis continues. The computer must be awake and online. Unexpected process exits resume from saved progress after restart; transient network failures use bounded retries, daily-budget pauses continue after local midnight, and manual pauses stay paused. Recent activity shows interruption causes and retry times. After five automatic job retries, or for authentication/configuration errors, resolve the displayed issue and resume manually.
 

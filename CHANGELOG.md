@@ -1,5 +1,13 @@
 # Changelog / 更新记录
 
+## 1.6.2 — 2026-10-27
+
+- Add a bilingual Set parallelism control beside active tasks and in AI connection. Change the shared limit from 1 to 8 without pausing or restarting tasks; the dialog retains edits during progress refreshes.
+- Show each task's actual active AI request count and the global waiting count. Explain per-paper versus history-batch processing and why completion counts arrive incrementally.
+- Verify that increasing concurrency admits additional requests during a running task and lowering it drains existing requests before admitting more work.
+
+新增任务进度旁的“设置并发数量”入口，可即时调节 1–8 个共享 AI 请求；显示各任务实际并发数及等待数。修改时无需中断任务，保留论文和既有分析进度。
+
 ## 1.6.1 — 2026-10-27
 
 - Repeated Collect updates requests return the current day's active collection instead of a conflict, including simultaneous clicks and requests racing scheduled collection.

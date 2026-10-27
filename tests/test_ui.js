@@ -38,7 +38,7 @@ vm.runInContext("const t=k=>COPY[k]?.[0]||k,esc=v=>String(v??''),btn=(a,l)=>'<bu
   assert.equal(await pending,false);assert.equal(vm.runInContext('T.rows.length',context),0);
   vm.runInContext(`
     const displayDate=x=>x||'',errorText=x=>x,lang=()=> 'en';
-    S.boot={local_day:'2026-10-27',version:'1.6.1',settings:{auto_resume:true},execution:{active:3,limit:3},jobs:[
+    S.boot={local_day:'2026-10-27',version:'1.6.1',settings:{auto_resume:true,ai_concurrency:3},execution:{active:3,limit:3,by_job:{1:1,2:2},waiting:3},jobs:[
       {id:1,kind:'collect',status:'running',argument:{input:{day:'2026-10-27'}},progress:{phase:'analysis'},queue:{total:9,completed:3}},
       {id:2,kind:'history_search',status:'running',argument:{input:7},progress:{history_collected:100,history_analyzed:20}},
       {id:3,kind:'analyze',status:'paused',argument:{},progress:{pause_requested:true},error:'paused_by_user'}
@@ -50,6 +50,10 @@ vm.runInContext("const t=k=>COPY[k]?.[0]||k,esc=v=>String(v??''),btn=(a,l)=>'<bu
   html=vm.runInContext('jobBanner()',context);
   assert.match(html,/collectJob #1/);assert.match(html,/historyPage #2/);assert.match(html,/analyzeJob #3/);
   assert.match(html,/3 \/ 3/);assert.equal((html.match(/pauseJob/g)||[]).length,2);
+  assert.match(html,/Set parallelism/);assert.match(html,/Waiting for an AI slot: 3/);
+  assert.match(vm.runInContext('jobParallelInfo(S.boot.jobs[0])',context),/1 AI requests in progress/);
+  assert.match(vm.runInContext('jobParallelInfo(S.boot.jobs[1])',context),/2 AI requests in progress/);
+  assert.match(vm.runInContext('jobParallelInfo(S.boot.jobs[1])',context),/Up to 10 papers per request/);
   assert.equal(vm.runInContext('activeCollection().id',context),1);
   assert.match(vm.runInContext('collectionButton()',context),/View collection progress/);
   const button={outerHTML:''};context.document.querySelectorAll=()=>[button];
@@ -65,5 +69,19 @@ vm.runInContext("const t=k=>COPY[k]?.[0]||k,esc=v=>String(v??''),btn=(a,l)=>'<bu
   assert.match(vm.runInContext('versionNotice()',context),/Save any unfinished edits/);
   controls['meta[name="academic-version"]'].content='1.6.1';
   assert.doesNotMatch(vm.runInContext('versionNotice()',context),/Save any unfinished edits/);
+  vm.runInContext(`const textInput=(name,label,value,type,attrs)=>'<input name="'+name+'" value="'+value+'" '+attrs+'>';`,context);
+  html=vm.runInContext('concurrencyForm()',context);assert.match(html,/min="1" max="8"/);assert.match(html,/Apply now/);
+  let closed=false,refreshed=false,saved;
+  controls['#concurrency-dialog']={close(){closed=true}};
+  controls['#schedule-form [name=ai_concurrency]']={value:'3'};
+  context.api=async(path,body)=>{saved={path,body};return {ai_concurrency:Number(body.ai_concurrency)}};
+  context.refreshVisible=async()=>{refreshed=true};
+  await vm.runInContext("saveConcurrency({ai_concurrency:'6'})",context);
+  assert.equal(saved.path,'/api/settings');assert.deepEqual(Object.keys(saved.body),['ai_concurrency']);
+  assert.equal(saved.body.ai_concurrency,'6');assert.equal(closed,true);assert.equal(refreshed,true);
+  assert.equal(controls['#schedule-form [name=ai_concurrency]'].value,6);
+  closed=false;refreshed=false;context.api=async()=>{throw new Error('offline')};
+  await assert.rejects(vm.runInContext("saveConcurrency({ai_concurrency:'8'})",context),/offline/);
+  assert.equal(closed,false);assert.equal(refreshed,false);assert.equal(vm.runInContext('S.boot.settings.ai_concurrency',context),6);
   console.log('UI state regression checks passed (filters, trash, parallel jobs, collection progress, upgrade notice).');
 })().catch(error=>{console.error(error);process.exitCode=1});

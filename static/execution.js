@@ -7,6 +7,15 @@ Object.assign(COPY,{
   reloadApp:['Refresh page','刷新页面'],
   executionTitle:['Automatic work & parallel assessment','自动运行与并行评估'],
   aiConcurrency:['Concurrent AI requests','AI 同时请求数'],
+  parallelSettings:['Set parallelism','设置并发数量'],
+  parallelTitle:['Parallel paper analysis','论文并行分析'],
+  parallelApply:['Apply now','立即应用'],
+  parallelCancel:['Cancel','取消'],
+  parallelSaved:['Parallel limit saved. Running tasks use it immediately.','并发上限已保存，正在运行的任务立即采用新设置。'],
+  parallelHelp:['Choose 1–8 simultaneous AI requests, shared across all tasks. Raising this starts more queued work without restarting. Lowering it lets requests already in progress finish.','可设置 1–8 个同时进行的 AI 请求，所有任务共享。调高后会直接增加并行处理，无需重启；调低时，已开始的请求会先完成。'],
+  parallelSpeed:['Results appear as each request finishes. Daily analysis handles one paper per request; history handles up to 10. Model response time and service limits also affect speed.','结果在各个请求完成后陆续显示。日常分析每个请求处理 1 篇，历史分析每个请求最多处理 10 篇。速度还取决于模型响应时间和服务方限制。'],
+  parallelWaiting:['Waiting for an AI slot','等待 AI 请求名额'],
+  parallelHistoryBatch:['Up to 10 papers per request','每个请求最多 10 篇'],
   concurrencyHelp:['Shared across daily updates and history searches. History assesses up to 10 papers per request. Higher reasoning effort can still take longer; provider and daily limits apply.','每日更新与历史检索共享此上限；历史评估每次最多 10 篇。更高推理档位仍可能耗时较长，并受服务方及每日请求额度限制。'],
   autoResume:['Automatically recover interrupted tasks','自动恢复意外中断的任务'],
   autoResumeHelp:['Network failures retry with backoff. Daily-budget pauses resume after the local day changes. Manual pauses stay paused; sign-in and configuration errors need attention.','网络故障退避重试；每日额度用尽后在当地次日继续。手动暂停不会自动恢复，登录和配置问题需要处理。'],
@@ -58,6 +67,18 @@ function focusCollection(id){
   $('#job-card-'+id)?.scrollIntoView({behavior:'smooth',block:'center'});
 }
 async function viewCollection(id){await refreshVisible();focusCollection(id)}
+function concurrencyForm(){return `<h2 id="parallel-title">${esc(t('parallelTitle'))}</h2><p class="small muted">${esc(t('parallelHelp'))}</p><form id="concurrency-form">${textInput('ai_concurrency','aiConcurrency',S.boot.settings.ai_concurrency||3,'number','min="1" max="8" step="1" required')}<p class="small muted">${esc(t('parallelSpeed'))}</p><div class="toolbar"><button type="button" data-action="close-concurrency">${esc(t('parallelCancel'))}</button><button class="primary" type="submit">${esc(t('parallelApply'))}</button></div></form>`}
+function showConcurrency(){
+  let dialog=$('#concurrency-dialog');
+  if(!dialog){dialog=document.createElement('dialog');dialog.id='concurrency-dialog';dialog.className='concurrency-dialog';dialog.setAttribute('aria-labelledby','parallel-title');document.body.append(dialog)}
+  dialog.innerHTML=concurrencyForm();dialog.showModal();
+}
+async function saveConcurrency(data){
+  S.boot.settings=await api('/api/settings',{ai_concurrency:data.ai_concurrency});
+  const schedule=$('#schedule-form [name=ai_concurrency]');if(schedule)schedule.value=S.boot.settings.ai_concurrency;
+  $('#concurrency-dialog').close();notify(t('parallelSaved'));await refreshVisible();
+}
+function jobParallelInfo(r){const n=S.boot.execution?.by_job?.[r.id]||0;return r.status==='running'?`<div class="tiny muted job-parallel"><strong>${n} ${esc(t('activeRequests'))}</strong>${r.kind==='history_search'?' · '+esc(t('parallelHistoryBatch')):''}</div>`:''}
 function historyBusy(id){return runningJobs().some(r=>r.kind.startsWith('history_')&&r.argument?.input===id)}
 function jobName(r){return t(({collect:'collectJob',analyze:'analyzeJob',interpret:'interpretJob',item_analysis:'itemAnalysisJob',import:'importJob',history_plan:'historyInterpret',history_search:'historyPage'})[r.kind]||r.kind)+' #'+r.id}
 function syncJobs(){
@@ -100,7 +121,7 @@ function jobBanner(){
   const jobs=all.filter(r=>r.status==='running'||(resumable(r)&&!all.some(other=>other.id>r.id&&group(other)===group(r))));
   if(!jobs.length)return '<div id="job-status"></div>';
   const x=S.boot.execution||{};
-  return `<section id="job-status" class="job-stack" aria-label="${esc(t('runs'))}"><div class="section-label"><strong>${esc(t('runs'))}</strong><span class="small muted">${x.active||0} / ${x.limit||3} ${esc(t('activeRequests'))}</span></div>${jobs.map(r=>`<div class="job-banner" id="job-card-${r.id}"><div><strong>${r.status==='running'?'<span class="busy"></span>':''}${esc(jobName(r))}</strong> · ${esc(t(r.status))}<div class="small">${esc(jobInfo(r))}</div>${r.progress?.model?`<div class="tiny muted">${esc(r.progress.model)} · ${esc(t('effort_'+(r.progress.reasoning_effort||'default')))}</div>`:''}${jobReason(r)}</div><div class="toolbar">${jobControls(r)}</div></div>`).join('')}</section>`;
+  return `<section id="job-status" class="job-stack" aria-label="${esc(t('runs'))}"><div class="section-label"><strong>${esc(t('runs'))}</strong><div class="toolbar"><span class="small muted">${x.active||0} / ${x.limit||3} ${esc(t('activeRequests'))}${x.waiting?' · '+esc(t('parallelWaiting'))+': '+x.waiting:''}</span>${btn('concurrency-settings','parallelSettings')}</div></div>${jobs.map(r=>`<div class="job-banner" id="job-card-${r.id}"><div><strong>${r.status==='running'?'<span class="busy"></span>':''}${esc(jobName(r))}</strong> · ${esc(t(r.status))}<div class="small">${esc(jobInfo(r))}</div>${jobParallelInfo(r)}${r.progress?.model?`<div class="tiny muted">${esc(r.progress.model)} · ${esc(t('effort_'+(r.progress.reasoning_effort||'default')))}</div>`:''}${jobReason(r)}</div><div class="toolbar">${jobControls(r)}</div></div>`).join('')}</section>`;
 }
 function jobEvents(r){return r.events?.length?`<details class="job-events"><summary>${esc(t('taskEvents'))}</summary>${r.events.map(e=>`<p class="tiny"><time>${esc(displayDate(e.at))} ${esc(new Date(e.at).toLocaleTimeString(lang()))}</time> · ${esc(t('event_'+e.event))}<br>${esc(errorText(e.detail.split(':')[0],e.detail.split(':').slice(1).join(':').trim()))}</p>`).join('')}</details>`:''}
 function runHTML(r){
