@@ -1,5 +1,12 @@
 # Changelog / 更新记录
 
+## 1.9.1 — 2026-10-28
+
+- Keep expanded and collapsed sections stable during live refreshes, including task records, nested task events, research-history coverage and paper evidence. Match sections by record ID, not list position or translated text.
+- Preserve disclosure keyboard focus and read the latest open state immediately before rendering, including clicks while requests are in flight. Existing papers, saved searches, analyses and settings are unchanged.
+
+修复折叠区域在自动刷新后自行收起的问题；按任务、检索和论文标识保留展开／收起状态及键盘焦点，兼容列表重排与中英文切换。
+
 ## 1.9.0 — 2026-10-27
 
 - Add an optional third-party IF fallback after publisher verification fails, using actual AI page-open events and dated journal records from Bioxbio, LetPub or WoS Journal Info. Keep references distinct from official/AI publisher verification.

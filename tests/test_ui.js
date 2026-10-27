@@ -7,7 +7,7 @@ const vm=require('node:vm');
 const controls={
   '[name=history_filter]':{value:'selected'},
   '[name=history_search]':{value:'old query'},
-  '#history-paper-results':{innerHTML:''}
+  '#history-paper-results':{innerHTML:'',querySelectorAll(){return []}}
 };
 const context=vm.createContext({
   COPY:{},ERRORS:{},S:{page:'history'},
@@ -100,7 +100,7 @@ assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'..','static','index.htm
   // Profile counters refresh independently of the settings form, including idle gaps.
   vm.runInContext("S.page='profile';S.boot={settings:{auto_if:true,model:'test'},jobs:[],execution:{},journal_metrics_status:{pending:68,found:31}}",context);
   assert.equal(vm.runInContext('shouldPoll()',context),true);
-  const expanded={open:true},metricPanel={innerHTML:'',querySelector(){return expanded}};
+  const expanded={open:true,dataset:{disclosure:'metric-failures'},querySelector(){return null}},metricPanel={innerHTML:'',querySelectorAll(){return [expanded]}};
   controls['#journal-lookup-status']=metricPanel;controls['[data-action="metrics-refresh"]']={textContent:''};
   vm.runInContext('syncMetricProgress()',context);assert.match(metricPanel.innerHTML,/Awaiting lookup: 68/);
   const refreshCode=fs.readFileSync(path.join(__dirname,'..','static/app.js'),'utf8').split('\n').find(l=>l.startsWith('async function refreshVisible('));
@@ -126,3 +126,36 @@ assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'..','static','index.htm
 assert.equal(vm.runInContext("jobStatus({kind:'collect',status:'complete',result:{truncated:['Crossref']}})",context),'completeLimited');
 assert.equal(vm.runInContext("resumable({kind:'collect',status:'complete',result:{truncated:['Crossref']}})",context),false);
 assert.equal(vm.runInContext("resumable({kind:'collect',status:'partial',result:{errors:['OpenAlex failed']}})",context),true);
+
+// Live updates rebuild elements. State must follow identities through reordering,
+// nested sections and translated labels; collapsing must also survive a refresh.
+function disclosure(key,open=false){
+  const summary={focus(options){assert.equal(options.preventScroll,true);context.document.activeElement=this}};
+  return {dataset:{disclosure:key},open,querySelector(){return summary}};
+}
+const oldJob=disclosure('job:43',true),oldEvents=disclosure('job:43:events',true),closedJob=disclosure('job:42');
+const newJob=disclosure('job:44'),newClosed=disclosure('job:42',true),newEvents=disclosure('job:43:events'),newOpen=disclosure('job:43');
+const region={nodes:[oldJob,oldEvents,closedJob],querySelectorAll(){return this.nodes},set innerHTML(value){this.nodes=value}};
+context.document.activeElement=oldEvents.querySelector();context.region=region;context.nextNodes=[newJob,newClosed,newEvents,newOpen];
+vm.runInContext('replaceContent(region,nextNodes)',context);
+assert.equal(newOpen.open,true);assert.equal(newEvents.open,true);assert.equal(newClosed.open,false);assert.equal(newJob.open,false);
+assert.equal(context.document.activeElement,newEvents.querySelector());
+newOpen.open=false;newEvents.open=false;
+context.nextNodes=[disclosure('job:43',true),disclosure('job:43:events',true)];
+vm.runInContext('replaceContent(region,nextNodes)',context);
+assert.equal(region.nodes[0].open,false);assert.equal(region.nodes[1].open,false);
+// Another record must not inherit the previous record's expanded section.
+region.nodes=[disclosure('history:1:coverage',true)];context.nextNodes=[disclosure('history:2:coverage')];
+vm.runInContext('replaceContent(region,nextNodes)',context);assert.equal(region.nodes[0].open,false);
+// Each refresh path must use the state-preserving renderer, not raw replacement.
+const appSource=fs.readFileSync(path.join(__dirname,'..','static/app.js'),'utf8');
+const historySource=fs.readFileSync(path.join(__dirname,'..','static/history.js'),'utf8');
+assert.match(appSource,/replaceContent\(\$\('#main'\),html\)/);
+assert.match(appSource,/replaceContent\(\$\('#activity-list'\)/);
+assert.match(historySource,/replaceContent\(\$\('#history-overview'\)/);
+assert.match(historySource,/replaceContent\(\$\('#history-paper-results'\)/);
+// All current collapsible sections declare stable identities (including nested ones).
+for(const name of ['app.js','history.js','execution.js','features.js']){
+  const source=fs.readFileSync(path.join(__dirname,'..','static',name),'utf8');
+  for(const tag of source.matchAll(/<details\b[^>]*>/g))assert.match(tag[0],/data-disclosure=/,name+': '+tag[0]);
+}

@@ -1,4 +1,24 @@
 'use strict';
+
+// Capture immediately before replacement, so clicks during a pending request win.
+// Keys identify the record and section, independent of order or translated labels.
+function replaceContent(element,html){
+  if(!element)return;
+  const selector='details[data-disclosure]',states=new Map();
+  let focused;
+  for(const details of element.querySelectorAll(selector)){
+    const key=details.dataset.disclosure;
+    states.set(key,details.open);
+    if(details.querySelector('summary')===document.activeElement)focused=key;
+  }
+  element.innerHTML=html;
+  for(const details of element.querySelectorAll(selector)){
+    const key=details.dataset.disclosure;
+    if(states.has(key))details.open=states.get(key);
+    if(key===focused)details.querySelector('summary')?.focus({preventScroll:true});
+  }
+}
+
 Object.assign(COPY,{
   viewCollection:['View collection progress','查看采集进度'],
   collectionAlreadyRunning:['Collection is already running. Showing the existing task.','采集已在运行，已为你显示现有任务进度。'],
@@ -135,10 +155,10 @@ function jobBanner(){
   const x=S.boot.execution||{};
   return `<section id="job-status" class="job-stack" aria-label="${esc(t('runs'))}"><div class="section-label"><strong>${esc(t('runs'))}</strong><div class="toolbar"><span class="small muted">${x.active||0} / ${x.limit||3} ${esc(t('activeRequests'))}${x.waiting?' · '+esc(t('parallelWaiting'))+': '+x.waiting:''}</span>${btn('concurrency-settings','parallelSettings')}</div></div>${jobs.map(r=>`<div class="job-banner" id="job-card-${r.id}"><div><strong>${r.status==='running'?'<span class="busy"></span>':''}${esc(jobName(r))}</strong> · ${esc(jobStatus(r))}<div class="small">${esc(jobInfo(r))}</div>${jobParallelInfo(r)}${jobAIInfo(r)}${jobReason(r)}</div><div class="toolbar">${jobControls(r)}</div></div>`).join('')}</section>`;
 }
-function jobEvents(r){return r.events?.length?`<details class="job-events"><summary>${esc(t('taskEvents'))}</summary>${r.events.map(e=>`<p class="tiny"><time>${esc(displayDate(e.at))} ${esc(new Date(e.at).toLocaleTimeString(lang()))}</time> · ${esc(t('event_'+e.event))}<br>${esc(errorText(e.detail.split(':')[0],e.detail.split(':').slice(1).join(':').trim()))}</p>`).join('')}</details>`:''}
+function jobEvents(r){return r.events?.length?`<details class="job-events" data-disclosure="job:${r.id}:events"><summary>${esc(t('taskEvents'))}</summary>${r.events.map(e=>`<p class="tiny"><time>${esc(displayDate(e.at))} ${esc(new Date(e.at).toLocaleTimeString(lang()))}</time> · ${esc(t('event_'+e.event))}<br>${esc(errorText(e.detail.split(':')[0],e.detail.split(':').slice(1).join(':').trim()))}</p>`).join('')}</details>`:''}
 function runHTML(r){
   const data=typeof r.result==='string'?JSON.parse(r.result):r.result||{};
-  return `<details class="run"><summary>${esc(jobName(r))} <span class="badge">${esc(jobStatus(r))}</span> <span class="tiny muted">${esc(displayDate(r.started_at))}</span></summary><p class="small">${esc(jobInfo(r))}</p>${jobReason(r)}${jobControls(r)}${data.errors?.length?`<pre>${esc(data.errors.join('\n'))}</pre>`:''}${data.truncated?.length?`<p class="warning">${esc(t('limitedHelp'))} ${esc(data.truncated.join(' · '))}</p>`:''}${jobEvents(r)}</details>`;
+  return `<details class="run" data-disclosure="job:${r.id}"><summary>${esc(jobName(r))} <span class="badge">${esc(jobStatus(r))}</span> <span class="tiny muted">${esc(displayDate(r.started_at))}</span></summary><p class="small">${esc(jobInfo(r))}</p>${jobReason(r)}${jobControls(r)}${data.errors?.length?`<pre>${esc(data.errors.join('\n'))}</pre>`:''}${data.truncated?.length?`<p class="warning">${esc(t('limitedHelp'))} ${esc(data.truncated.join(' · '))}</p>`:''}${jobEvents(r)}</details>`;
 }
 function automationControls(){const s=S.boot.settings;return `<hr><h3>${esc(t('executionTitle'))}</h3>${textInput('ai_concurrency','aiConcurrency',s.ai_concurrency||3,'number','min="1" max="64" required')}<p class="small muted">${esc(t('concurrencyHelp'))}</p><label class="check"><input name="auto_resume" type="checkbox" ${s.auto_resume?'checked':''}>${esc(t('autoResume'))}</label><p class="small muted">${esc(t('autoResumeHelp'))}</p><label class="check"><input name="adapt_saved" type="checkbox" ${s.adapt_saved?'checked':''}>${esc(t('adaptSaved'))}</label><p class="small muted">${esc(t('adaptSavedHelp'))}</p>`}
 function automationStatus(){return `<div class="automation-status">${S.boot.startup?.supported?`<label class="check"><input id="login-startup" type="checkbox" ${S.boot.startup.enabled?'checked':''}>${esc(t('loginStartup'))}</label>`:''}<p class="small muted">${esc(t('startupHelp'))}</p><p class="tiny muted">${esc(t('scheduledDay'))}: ${esc(S.boot.scheduled_day||'—')}<br>${esc(t('schedulerChecked'))}: ${esc(displayDate(S.boot.scheduler?.checked_at))}</p>${S.boot.scheduler?.error?`<p class="warning">${esc(errorText(S.boot.scheduler.error))}</p>`:''}</div>`}
