@@ -16,6 +16,10 @@ Object.assign(COPY,{
   parallelSpeed:['Results appear as each request finishes. Daily analysis handles one paper per request; history handles up to 10. Model response time and service limits also affect speed.','结果在各个请求完成后陆续显示。日常分析每个请求处理 1 篇，历史分析每个请求最多处理 10 篇。速度还取决于模型响应时间和服务方限制。'],
   parallelWaiting:['Waiting for an AI slot','等待 AI 请求名额'],
   parallelHistoryBatch:['Up to 10 papers per request','每个请求最多 10 篇'],
+  nextAISettings:['Next requests','后续请求'],
+  activeAISettings:['In-flight requests','正在执行的请求'],
+  liveAIHelp:['Model and reasoning changes apply to the next unsent request in running tasks using this connection. Requests already sent finish with their original settings; completed papers are kept.','修改模型和推理档位后，使用此连接的运行中任务会从下一次尚未发送的请求开始采用新设置。已发送的请求按原设置完成，已完成论文保留。'],
+  aiSettingsSaved:['Saved. The next unsent requests will use the new model and reasoning level. In-flight requests keep their original settings.','已保存。后续尚未发送的请求将使用新模型和推理档位；已发送的请求按原设置完成。'],
   concurrencyHelp:['Shared across daily updates and history searches. History assesses up to 10 papers per request. Higher reasoning effort can still take longer; provider and daily limits apply.','每日更新与历史检索共享此上限；历史评估每次最多 10 篇。更高推理档位仍可能耗时较长，并受服务方及每日请求额度限制。'],
   autoResume:['Automatically recover interrupted tasks','自动恢复意外中断的任务'],
   autoResumeHelp:['Network failures retry with backoff. Daily-budget pauses resume after the local day changes. Manual pauses stay paused; sign-in and configuration errors need attention.','网络故障退避重试；每日额度用尽后在当地次日继续。手动暂停不会自动恢复，登录和配置问题需要处理。'],
@@ -79,6 +83,11 @@ async function saveConcurrency(data){
   $('#concurrency-dialog').close();notify(t('parallelSaved'));await refreshVisible();
 }
 function jobParallelInfo(r){const n=S.boot.execution?.by_job?.[r.id]||0;return r.status==='running'?`<div class="tiny muted job-parallel"><strong>${n} ${esc(t('activeRequests'))}</strong>${r.kind==='history_search'?' · '+esc(t('parallelHistoryBatch')):''}</div>`:''}
+function jobAIInfo(r){
+  const state=r.ai_state,label=s=>`${esc(s.model)} · ${esc(t('effort_'+(s.reasoning_effort||'default')))}`;
+  if(state?.next?.model&&(r.status==='running'||resumable(r)))return `<div class="tiny muted">${esc(t('nextAISettings'))}: ${label(state.next)}</div>${state.active.length?`<div class="tiny muted">${esc(t('activeAISettings'))}: ${state.active.map(s=>label(s)+' × '+s.count).join('; ')}</div>`:''}`;
+  return r.progress?.model?`<div class="tiny muted">${label(r.progress)}</div>`:'';
+}
 function historyBusy(id){return runningJobs().some(r=>r.kind.startsWith('history_')&&r.argument?.input===id)}
 function jobName(r){return t(({collect:'collectJob',analyze:'analyzeJob',interpret:'interpretJob',item_analysis:'itemAnalysisJob',import:'importJob',history_plan:'historyInterpret',history_search:'historyPage'})[r.kind]||r.kind)+' #'+r.id}
 function syncJobs(){
@@ -121,7 +130,7 @@ function jobBanner(){
   const jobs=all.filter(r=>r.status==='running'||(resumable(r)&&!all.some(other=>other.id>r.id&&group(other)===group(r))));
   if(!jobs.length)return '<div id="job-status"></div>';
   const x=S.boot.execution||{};
-  return `<section id="job-status" class="job-stack" aria-label="${esc(t('runs'))}"><div class="section-label"><strong>${esc(t('runs'))}</strong><div class="toolbar"><span class="small muted">${x.active||0} / ${x.limit||3} ${esc(t('activeRequests'))}${x.waiting?' · '+esc(t('parallelWaiting'))+': '+x.waiting:''}</span>${btn('concurrency-settings','parallelSettings')}</div></div>${jobs.map(r=>`<div class="job-banner" id="job-card-${r.id}"><div><strong>${r.status==='running'?'<span class="busy"></span>':''}${esc(jobName(r))}</strong> · ${esc(t(r.status))}<div class="small">${esc(jobInfo(r))}</div>${jobParallelInfo(r)}${r.progress?.model?`<div class="tiny muted">${esc(r.progress.model)} · ${esc(t('effort_'+(r.progress.reasoning_effort||'default')))}</div>`:''}${jobReason(r)}</div><div class="toolbar">${jobControls(r)}</div></div>`).join('')}</section>`;
+  return `<section id="job-status" class="job-stack" aria-label="${esc(t('runs'))}"><div class="section-label"><strong>${esc(t('runs'))}</strong><div class="toolbar"><span class="small muted">${x.active||0} / ${x.limit||3} ${esc(t('activeRequests'))}${x.waiting?' · '+esc(t('parallelWaiting'))+': '+x.waiting:''}</span>${btn('concurrency-settings','parallelSettings')}</div></div>${jobs.map(r=>`<div class="job-banner" id="job-card-${r.id}"><div><strong>${r.status==='running'?'<span class="busy"></span>':''}${esc(jobName(r))}</strong> · ${esc(t(r.status))}<div class="small">${esc(jobInfo(r))}</div>${jobParallelInfo(r)}${jobAIInfo(r)}${jobReason(r)}</div><div class="toolbar">${jobControls(r)}</div></div>`).join('')}</section>`;
 }
 function jobEvents(r){return r.events?.length?`<details class="job-events"><summary>${esc(t('taskEvents'))}</summary>${r.events.map(e=>`<p class="tiny"><time>${esc(displayDate(e.at))} ${esc(new Date(e.at).toLocaleTimeString(lang()))}</time> · ${esc(t('event_'+e.event))}<br>${esc(errorText(e.detail.split(':')[0],e.detail.split(':').slice(1).join(':').trim()))}</p>`).join('')}</details>`:''}
 function runHTML(r){

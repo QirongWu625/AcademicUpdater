@@ -30,8 +30,10 @@ class Application:
         with self.store.db() as c:
             ids=[r[0] for r in c.execute("SELECT id FROM runs WHERE (kind NOT IN ('history_plan','history_search') OR EXISTS(SELECT 1 FROM histories h WHERE h.id=json_extract(runs.argument,'$.input') AND h.deleted_at IS NULL)) ORDER BY CASE WHEN status='running' THEN 0 WHEN status IN ('paused','interrupted','failed') THEN 1 ELSE 2 END,id DESC LIMIT 30")]
         learning=self.store.saved_scope_snapshot(include_papers=False)
+        jobs=[self.store.job(i) for i in ids]
+        for job in jobs:job['ai_state']=self.service.job_ai_state(job)
         return {'app':'AcademicUpdater','version':__version__,'csrf':self.csrf,'settings':self.store.settings(),'profile':self.store.get('profile'),'sources':self.store.sources(),'stats':self.store.stats(),'auth':self.auth_status(),'capabilities':self.ai.capabilities(),'histories':self.service.history.list(),
-                'jobs':[self.store.job(i) for i in ids],'execution':self.service.ai_limiter.state(),'startup':startup.status(),
+                'jobs':jobs,'execution':self.service.ai_limiter.state(),'startup':startup.status(),
                 'scheduler':self.store.get('scheduler_status',{}),'scheduled_day':self.store.get('scheduled_day'),'local_day':self.service.local_day(),
                 'saved_learning':{'pending':learning['changed'],'count':learning['count']} if learning else None}
 

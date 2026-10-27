@@ -6,7 +6,7 @@
 
 An AI-powered, local-first research assistant for tracking papers and industry updates, discovering influential and foundational work, and organizing a deduplicated personal library.
 
-**Version 1.6.2 · MIT license · Contributions welcome**
+**Version 1.6.3 · MIT license · Contributions welcome**
 
 ## Automatic updates and parallel work
 
@@ -50,7 +50,7 @@ Screenshots of the **real application** using synthetic demonstration records. T
 - **Library:** save papers and updates with authors, journal, notes, reading status and source versions. Filter immediately and sort by date, title, first-author surname, journal, relevance or impact factor.
 - **Research history:** save a separate historical search, prioritize influential and foundational candidates, and build a referenced timeline from the shortlist. Searches and results can be reopened and exported.
 - **Journal metrics:** enter or import impact factors with a year and source. Missing values remain missing; no commercial journal-metrics dataset is bundled.
-- **AI settings:** use an eligible ChatGPT sign-in connection, an OpenAI API key, or a compatible local model server. Select the model and its supported reasoning effort.
+- **AI settings:** use an eligible ChatGPT sign-in connection, an OpenAI API key, or a compatible local model server. Select the model and its supported reasoning effort. Within the same connection, changes apply to the next unsent request in running or resumed tasks, including queued requests and retries. In-flight requests retain their original settings; completed papers are not reprocessed. The task panel shows next-request settings separately from in-flight model/effort counts.
 - **Persistent work:** SQLite storage, identifier-based deduplication, backups, exports, per-paper checkpoints, pause/resume and recovery after interruption.
 - **English and Chinese:** switch the interface language and configure the summary language separately. Personal profile contains research scope, sources, schedule and AI connection.
 

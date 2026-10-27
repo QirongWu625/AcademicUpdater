@@ -101,13 +101,13 @@ class HistoryTests(unittest.TestCase):
             with self.assertRaises(AppError):self.history.synthesize(h,self.store.settings())
         self.assertEqual(self.history.get(hid)['report'],{})
 
-    def test_budget_pause_resumes_saved_collection_with_original_settings(self):
+    def test_budget_pause_resumes_saved_collection_with_latest_effort(self):
         hid=self.create();settings={**self.store.settings(),'model':'gpt-6-astra','reasoning_effort':'high'};self.store.put('settings',settings)
         with patch.object(self.ai,'generate',side_effect=AppError('daily_ai_limit')):job=self.search(hid)
         self.assertEqual(job['status'],'paused');self.assertEqual(self.history.get(hid)['counts']['total'],2)
         self.store.put('settings',{**settings,'reasoning_effort':'xhigh'})
         with patch('academic_updater.history.historical_page') as remote:self.service.resume(job['id']);self.wait();remote.assert_not_called()
-        self.assertEqual(self.history.get(hid)['status'],'complete');self.assertEqual(self.ai.calls[0][1]['reasoning_effort'],'high')
+        self.assertEqual(self.history.get(hid)['status'],'complete');self.assertEqual(self.ai.calls[0][1]['reasoning_effort'],'xhigh')
 
     def test_restart_resumes_completed_collection_and_skips_saved_classification(self):
         hid=self.create();self.search(hid);h=self.history.get(hid);job=h['job']['id'];calls=len(self.ai.calls)

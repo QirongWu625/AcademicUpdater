@@ -257,13 +257,13 @@ class History:
                     if not batch:return
                     last=batch[-1]['id'];yield batch
             def assess(batch):
-                self.service.ai_call(job,lambda:self.analyze_batch(hid,{**h['scope'],'original_prompt':h['prompt']},batch,settings))
+                self.service.ai_call(job,lambda effective:self.analyze_batch(hid,{**h['scope'],'original_prompt':h['prompt']},batch,effective),settings)
                 counts=self.get(hid,False)['counts'];checkpoint(job,history_analyzed=counts.get('completed',0),history_collected=counts['total'])
             self.service.parallel_work(job,batches(),assess)
             h=self.get(hid)
             if h['items'] and not h['report']:
                 pause();self.update(hid,status='summarizing');checkpoint(job,phase='history_summarizing')
-                self.service.ai_call(job,lambda:self.synthesize(h,settings))
+                self.service.ai_call(job,lambda effective:self.synthesize(h,effective),settings)
         errors.extend(progress.get('record_errors',[]))
         limited=[x['source']+' · '+x['query'] for x in progress['streams'] if x.get('capped') or x.get('source_limited')]
         return {'history_id':hid,'papers':self.get(hid,False)['counts']['total'],'errors':errors,'truncated':limited}
@@ -279,6 +279,7 @@ class History:
             original=by_id[a['id']]['title']+'\n'+by_id[a['id']]['abstract']
             if any(q not in original for q in a['evidence_quotes']):raise AppError('history_invalid_evidence')
             if config.get('discovery_mode')=='landmark':a['selection']=landmark_selection(next(i for i in batch if i['id']==a['id']),a,config)
+            a['ai']={k:settings.get(k,'default' if k=='reasoning_effort' else '') for k in ('provider','model','reasoning_effort')}
         with self.store.db() as c:
             for a in answers:c.execute("UPDATE history_items SET status='completed',result=? WHERE history_id=? AND item_id=?",(encode(a),hid,a['id']))
 

@@ -54,6 +54,12 @@ vm.runInContext("const t=k=>COPY[k]?.[0]||k,esc=v=>String(v??''),btn=(a,l)=>'<bu
   assert.match(vm.runInContext('jobParallelInfo(S.boot.jobs[0])',context),/1 AI requests in progress/);
   assert.match(vm.runInContext('jobParallelInfo(S.boot.jobs[1])',context),/2 AI requests in progress/);
   assert.match(vm.runInContext('jobParallelInfo(S.boot.jobs[1])',context),/Up to 10 papers per request/);
+  vm.runInContext("COPY.effort_medium=['Medium','中等'];COPY.effort_max=['Max','最高'];S.boot.jobs[0].ai_state={next:{model:'new-model',reasoning_effort:'medium'},active:[{model:'old-model',reasoning_effort:'max',count:1}]}",context);
+  html=vm.runInContext('jobAIInfo(S.boot.jobs[0])',context);
+  assert.match(html,/Next requests: new-model · Medium/);assert.match(html,/In-flight requests: old-model · Max × 1/);
+  vm.runInContext("S.boot.jobs[0].ai_state.active=[]",context);
+  assert.doesNotMatch(vm.runInContext('jobAIInfo(S.boot.jobs[0])',context),/In-flight requests/);
+  assert.match(vm.runInContext("jobAIInfo({status:'complete',progress:{model:'old-model',reasoning_effort:'max'}})",context),/old-model · Max/);
   assert.equal(vm.runInContext('activeCollection().id',context),1);
   assert.match(vm.runInContext('collectionButton()',context),/View collection progress/);
   const button={outerHTML:''};context.document.querySelectorAll=()=>[button];

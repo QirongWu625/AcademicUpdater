@@ -163,7 +163,7 @@ class QueueTests(unittest.TestCase):
         fake.analyze.side_effect=lambda item_id,profile,settings,expected_version:save_analysis(reopened,item_id,profile=profile,settings=settings)
         service=Service(reopened,fake);service.recover_interrupted();self.wait(service)
         fake.analyze.assert_called_once();self.assertEqual(fake.analyze.call_args.args[0],c)
-        self.assertEqual(fake.analyze.call_args.kwargs['settings']['reasoning_effort'],'high')
+        self.assertEqual(fake.analyze.call_args.kwargs['settings']['reasoning_effort'],'xhigh')
         self.assertEqual(reopened.job(job)['queue'],{'total':3,'completed':3})
 
     def test_relevance_reverse_keeps_unknowns_last(self):

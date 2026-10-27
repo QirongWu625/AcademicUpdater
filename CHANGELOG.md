@@ -1,5 +1,13 @@
 # Changelog / 更新记录
 
+## 1.6.3 — 2026-10-27
+
+- Running and resumed tasks adopt the current model and reasoning effort on each unsent AI request within the same connection, including requests waiting for a slot and retries. Requests already dispatched retain their own settings. Provider and local endpoint changes do not redirect existing tasks.
+- Show next-request settings separately from actual in-flight model/effort counts. Clarify when saved AI settings take effect.
+- Keep completed daily and history assessments, record the actual settings for new history classifications, and preserve task scopes and checkpoints.
+
+修复运行中任务一直沿用旧推理档位的问题：同一 AI 连接下，后续请求采用最新模型与档位；已发出的请求正常完成，已完成论文不重跑。界面分别显示“后续请求”与“正在执行的请求”。
+
 ## 1.6.2 — 2026-10-27
 
 - Add a bilingual Set parallelism control beside active tasks and in AI connection. Change the shared limit from 1 to 8 without pausing or restarting tasks; the dialog retains edits during progress refreshes.
