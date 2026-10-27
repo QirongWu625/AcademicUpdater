@@ -112,6 +112,14 @@ assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'..','static','index.htm
   vm.runInContext("S.page='today';S.boot.jobs=[];S.boot.journal_metrics_status={pending:1}",context);assert.equal(vm.runInContext('shouldPoll()',context),true);
   vm.runInContext("S.boot.journal_metrics_status={pending:0,error:68}",context);assert.equal(vm.runInContext('shouldPoll()',context),false);
   assert.match(vm.runInContext("jobStatus({kind:'journal_metrics',status:'complete',result:{failed:68}})",context),/Run finished/);
+  // Reference IF keeps an explicit label and source link in ordinary paper cards.
+  const bibliographyCode=fs.readFileSync(path.join(__dirname,'..','static/app.js'),'utf8').split('\n').find(l=>l.startsWith('function bibliographyHTML('));
+  context.safeURL=url=>url;vm.runInContext(bibliographyCode,context);
+  context.referenceItem={kind:'paper',authors:['A. Researcher'],journal:'Example Journal',impact_factor:5.3,if_year:2025,if_status:'reference',if_source:'Bioxbio',if_source_url:'https://www.bioxbio.com/journal/EXAMPLE'};
+  html=vm.runInContext('bibliographyHTML(referenceItem)',context);
+  assert.match(html,/Reference IF 5.3/);assert.match(html,/Third-party reference/);assert.match(html,/metric-reference/);assert.match(html,/https:\/\/www.bioxbio.com/);
+  vm.runInContext("S.boot.journal_metrics_status={found:31,reference:10};S.boot.jobs=[]",context);
+  assert.match(vm.runInContext('metricProgressHTML()',context),/Third-party references: 10/);
   console.log('UI state regression checks passed (filters, trash, parallel jobs, collection progress, profile data controls).');
 })().catch(error=>{console.error(error);process.exitCode=1});
 

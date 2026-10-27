@@ -215,6 +215,15 @@ class JournalLookup:
             c.execute("DELETE FROM kv WHERE key='journal_lookup_blocked'")
 
     def find(self,job,settings,journal,issns):
+        from .execution import BLOCKED
+        try:return self.find_official(job,settings,journal,issns)
+        except AppError as exc:
+            if exc.code in BLOCKED-{'web_search_unavailable'} or not self.store.settings().get('reference_if',True):raise
+            self.service._check_pause(job)
+            from .journal_reference import find_reference
+            return find_reference(self.service,job,settings,journal,issns)
+
+    def find_official(self,job,settings,journal,issns):
         payload={'journal':journal,'issns':issns,'today':self.service.local_day(),'allowed_domains':PUBLISHERS}
         blocked=self.store.get('journal_lookup_blocked',{})
         skip_web=settings['provider']=='local' or (blocked.get('provider')==settings['provider'] and blocked.get('model')==settings['model'] and blocked.get('until','')>now())
@@ -247,7 +256,7 @@ class JournalLookup:
     def run(self,job,settings):
         from .execution import BLOCKED
         previous=self.store.job(job)['progress'].get('journal_counts',{})
-        counts={key:previous.get(key,0) for key in ('found','unavailable','failed','processed')};guard=threading.Lock()
+        counts={key:previous.get(key,0) for key in ('found','reference','unavailable','failed','processed')};guard=threading.Lock()
         def lookup(row):
             key=row['journal_key']
             self.service._check_pause(job)
@@ -258,17 +267,17 @@ class JournalLookup:
                     issns=json.loads(row['issns'])
                     metric=self.find(job,settings,row['journal'],issns)
                     self.store.save_metrics([metric],automatic=True)
-                    status='found';error='';evidence=encode(metric)
+                    status='reference' if metric.get('verification')=='third_party' else 'found';error='';evidence=encode(metric)
                 except AppError as exc:
                     if exc.code in BLOCKED-{'web_search_unavailable'}:raise
-                    status='unavailable' if exc.code in ('metric_not_found','metric_unverified','web_search_unavailable') else 'error'
+                    status='unavailable' if exc.code in ('metric_not_found','metric_unverified','web_search_unavailable','reference_not_found','reference_unverified') else 'error'
                     error=exc.code;evidence=encode({'error':exc.code,'detail':exc.detail})
                 except (ValueError,TypeError,KeyError) as exc:
                     status='error';error='metric_invalid_data';evidence=encode({'error':error,'detail':type(exc).__name__})
                 retry=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(days=7 if status=='unavailable' else 1 if status=='error' else 180)).isoformat()
                 with self.store.db() as c:c.execute('UPDATE journal_lookups SET status=?,error=?,evidence=?,updated_at=?,retry_at=? WHERE journal_key=?',(status,error,evidence,now(),retry,key))
                 with guard:
-                    counts[{'found':'found','unavailable':'unavailable','error':'failed'}[status]]+=1;counts['processed']+=1
+                    counts[{'found':'found','reference':'reference','unavailable':'unavailable','error':'failed'}[status]]+=1;counts['processed']+=1
                     self.service._checkpoint(job,journal_counts=dict(counts))
             finally:
                 # Pauses, authentication failures and process shutdown leave

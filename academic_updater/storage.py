@@ -18,7 +18,7 @@ def encode(value):
     return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
 
 
-DEFAULT_SETTINGS = {'language': 'en', 'summary_language': 'auto', 'provider': 'subscription', 'model': '', 'reasoning_effort':'default', 'local_url': 'http://127.0.0.1:11434/v1', 'daily_ai_limit': 30, 'daily_digest_limit': 10, 'schedule_enabled': True, 'schedule_time': '08:00', 'utc_offset': 10, 'lookback_days': 14, 'max_per_source': 100, 'ai_concurrency':3, 'auto_resume':True, 'adapt_saved':True,'auto_if':True}
+DEFAULT_SETTINGS = {'language': 'en', 'summary_language': 'auto', 'provider': 'subscription', 'model': '', 'reasoning_effort':'default', 'local_url': 'http://127.0.0.1:11434/v1', 'daily_ai_limit': 30, 'daily_digest_limit': 10, 'schedule_enabled': True, 'schedule_time': '08:00', 'utc_offset': 10, 'lookback_days': 14, 'max_per_source': 100, 'ai_concurrency':3, 'auto_resume':True, 'adapt_saved':True,'auto_if':True,'reference_if':True}
 EMPTY_PROFILE = {'topic': '', 'prompt': '', 'exclude': '', 'revision': 0, 'understanding': None, 'understanding_revision': None, 'origin': None, 'active': None}
 
 
@@ -363,7 +363,7 @@ class Store:
         validated=[validate_metric(row) for row in rows]
         with self.db() as c:
             for m,original in zip(validated,rows):
-                c.execute('INSERT INTO journal_metrics(journal,journal_key,issns,year,impact_factor,source,source_url,updated_at,origin,evidence_quote,verification) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(journal_key,year) DO UPDATE SET journal=excluded.journal,issns=excluded.issns,impact_factor=excluded.impact_factor,source=excluded.source,source_url=excluded.source_url,updated_at=excluded.updated_at,origin=excluded.origin,evidence_quote=excluded.evidence_quote,verification=excluded.verification WHERE ?=0 OR journal_metrics.origin=\'automatic\'',(m['journal'],m['journal_key'],encode(m['issns']),m['year'],m['impact_factor'],m['source'],m['source_url'],now(),'automatic' if automatic else 'manual',str(original.get('evidence_quote',''))[:1600] if automatic else '',str(original.get('verification','publisher_text')) if automatic else '',int(automatic)))
+                c.execute('INSERT INTO journal_metrics(journal,journal_key,issns,year,impact_factor,source,source_url,updated_at,origin,evidence_quote,verification) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(journal_key,year) DO UPDATE SET journal=excluded.journal,issns=excluded.issns,impact_factor=excluded.impact_factor,source=excluded.source,source_url=excluded.source_url,updated_at=excluded.updated_at,origin=excluded.origin,evidence_quote=excluded.evidence_quote,verification=excluded.verification WHERE ?=0 OR (journal_metrics.origin=\'automatic\' AND (?<>\'third_party\' OR journal_metrics.verification=\'third_party\'))',(m['journal'],m['journal_key'],encode(m['issns']),m['year'],m['impact_factor'],m['source'],m['source_url'],now(),'automatic' if automatic else 'manual',str(original.get('evidence_quote',''))[:1600] if automatic else '',str(original.get('verification','publisher_text')) if automatic else '',int(automatic),str(original.get('verification','publisher_text'))))
         return len(validated)
 
     def pending_items(self,profile_version):

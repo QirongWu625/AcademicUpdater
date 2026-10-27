@@ -24,3 +24,5 @@ main{margin:0 auto;align-self:start}.toolbar input[type=checkbox]{flex:none;min-
 .concurrency-dialog{width:min(530px,94vw);padding:25px}.concurrency-dialog .toolbar{justify-content:flex-end;margin-top:20px}.job-stack .section-label{flex-wrap:wrap}.job-parallel{margin-top:4px}
 
 .data-management{margin-top:24px}.data-management .danger{margin-top:12px}.retrieval-editor{padding:16px;background:var(--soft);border-radius:8px;margin:16px 0}.identity-card{padding:15px;background:var(--soft);border-radius:8px;margin:12px 0}.data-clear-dialog{padding:26px;width:min(600px,94vw)}
+
+.metric-reference{background:#fff3d6;color:#785300;border:1px solid #e9cd88;padding:3px 7px;border-radius:5px}.metric-reference a{color:inherit;text-decoration:underline}

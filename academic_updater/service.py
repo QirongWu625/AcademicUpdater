@@ -501,7 +501,7 @@ class Service:
             try:dt.datetime.strptime(body['schedule_time'],'%H:%M')
             except (ValueError,TypeError):raise AppError('invalid_setting')
             s['schedule_time']=body['schedule_time']
-        for key in ('schedule_enabled','auto_resume','adapt_saved','auto_if'):
+        for key in ('schedule_enabled','auto_resume','adapt_saved','auto_if','reference_if'):
             if key in body:s[key]=bool(body[key])
         if 'model' in body:s['model']=str(body['model']).strip()[:120]
         if 'local_url' in body:s['local_url']=validate_url(str(body['local_url']).strip().rstrip('/'),local=True)

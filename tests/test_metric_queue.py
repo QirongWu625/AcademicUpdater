@@ -32,7 +32,7 @@ class MetricQueueTests(unittest.TestCase):
         self.assertEqual(len(seen),68);self.assertEqual(len(set(seen)),68)
         with self.store.db() as c:runs=c.execute('SELECT id FROM runs').fetchall()
         self.assertEqual(len(runs),1);r=self.store.job(runs[0][0])
-        self.assertEqual(r['status'],'complete');self.assertEqual(r['result'],{'found':23,'unavailable':23,'failed':22,'processed':68})
+        self.assertEqual(r['status'],'complete');self.assertEqual(r['result'],{'found':23,'reference':0,'unavailable':23,'failed':22,'processed':68})
         self.assertEqual(self.store.metric_status(),{'found':23,'unavailable':23,'error':22});self.assertEqual(self.service.journals.pending(),[])
 
     def test_active_retry_reuses_job_without_resetting_completed_failures(self):

@@ -6,7 +6,7 @@
 
 An AI-powered, local-first research assistant for tracking papers and industry updates, discovering influential and foundational work, and organizing a deduplicated personal library.
 
-**Version 1.8.2 · MIT license · Contributions welcome**
+**Version 1.9.0 · MIT license · Contributions welcome**
 
 ## Semantic discovery and author searches
 
@@ -167,3 +167,7 @@ Daily collection uses supported OpenAlex semantic filters and checks the exact d
 Automatic IF includes the metric year and publisher source. Directly accessible pages are checked against the original text, journal identity and JIF table column. When the publisher denies direct access, two independent AI web reads must agree, each backed by an actual page-open event, explicit dated JIF and ISSN. These are labeled **AI web sources**; they remain model-extracted evidence, not a licensed JCR feed or an exact local HTML verification. Conflicting or unsupported values remain missing. Profile shows recent lookup issues, and Refresh immediately retries missing values. Manual corrections are preserved.
 
 IF lookup drains the eligible queue in one continuous task. Repeated Retry clicks show the active task without requeuing failures. Profile counts update live, including waiting, querying, found, unavailable and failed. Failed entries retain their retry cooldown; manual pauses, sign-in problems and usage limits remain visible barriers.
+
+### Third-party IF references
+
+When publisher evidence is unavailable, the enabled Profile option can query Bioxbio, LetPub and WoS Journal Info for a dated JIF reference. Paper cards display **Reference IF · Third-party reference**, the metric year and a direct source link. These are third-party reports, not publisher-verified or licensed JCR data. We exclude CiteScore, Scopus impact scores, five-year IF and estimates, and check journal identity including registered print/electronic ISSN aliases. Public page text is checked when accessible; an AI-read reference requires an actual page-open event. Missing or unmatched evidence stays missing. Same-year official values and manual corrections cannot be replaced by a reference. CSV exports append `if_status` so this distinction survives export. Disable new third-party lookups in Profile if desired; already saved references retain their labels.

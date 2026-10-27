@@ -55,7 +55,7 @@ class RecoveryMetricTests(unittest.TestCase):
             second={**first,'impact_factor':'5.5','evidence_quote':'2025 Impact Factor | 5.5'}
             service.ai_call=Mock(side_effect=[first,second])
             with patch('academic_updater.journal_lookup.validate_url'),patch('academic_updater.journal_lookup.request',side_effect=AppError('upstream_http_error','HTTP 403')):
-                with self.assertRaisesRegex(AppError,'metric_conflicting_evidence'):service.journals.find(1,store.settings(),'Example Journal',['1234-5678'])
+                with self.assertRaisesRegex(AppError,'metric_conflicting_evidence'):service.journals.find_official(1,store.settings(),'Example Journal',['1234-5678'])
             self.assertEqual(store.metrics(),[])
 
     def test_retry_and_one_time_migration_preserve_found_metrics(self):

@@ -104,12 +104,12 @@ def make_server(app,port):
                 if path=='/api/export':
                     with app.store.db() as c:ids=[r[0] for r in c.execute('SELECT id FROM items WHERE deleted_at IS NULL ORDER BY id')]
                     if q.get('format')=='csv':
-                        output=io.StringIO();writer=csv.writer(output);writer.writerow(['id','type','title','url','published_at','authors','journal','issns','impact_factor','if_year','if_source','if_source_url','saved','read','notes'])
+                        output=io.StringIO();writer=csv.writer(output);writer.writerow(['id','type','title','url','published_at','authors','journal','issns','impact_factor','if_year','if_source','if_source_url','saved','read','notes','if_status'])
                         def safe(v):
                             v=str(v or '')
                             return "'"+v if v.lstrip().startswith(('=','+','-','@')) else v
                         for item_id in ids:
-                            i=app.store.item(item_id);writer.writerow([i['id'],i['kind'],safe(i['title']),safe(i['url']),safe(i['published_at']),safe('; '.join(i['authors'])),safe(i['journal']),safe('; '.join(i['issns'])),i['impact_factor'],i['if_year'],safe(i['if_source']),safe(i['if_source_url']),i['saved'],i['is_read'],safe(i['notes'])])
+                            i=app.store.item(item_id);writer.writerow([i['id'],i['kind'],safe(i['title']),safe(i['url']),safe(i['published_at']),safe('; '.join(i['authors'])),safe(i['journal']),safe('; '.join(i['issns'])),i['impact_factor'],i['if_year'],safe(i['if_source']),safe(i['if_source_url']),i['saved'],i['is_read'],safe(i['notes']),i['if_status']])
                         return self.send('\ufeff'+output.getvalue(),'text/csv; charset=utf-8',filename='AcademicUpdater.csv')
                     return self.send('\n'.join(encode(app.store.item(i)) for i in ids),'application/x-ndjson; charset=utf-8',filename='AcademicUpdater.jsonl')
                 if path=='/api/backup':

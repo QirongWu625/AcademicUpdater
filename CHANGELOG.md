@@ -1,5 +1,14 @@
 # Changelog / 更新记录
 
+## 1.9.0 — 2026-10-27
+
+- Add an optional third-party IF fallback after publisher verification fails, using actual AI page-open events and dated journal records from Bioxbio, LetPub or WoS Journal Info. Keep references distinct from official/AI publisher verification.
+- Label references on paper cards, show the metric year and direct source link, count them separately in Profile, and include the provenance status in CSV/JSON exports. The option can be disabled in Profile.
+- Reject CiteScore, Scopus impact scores, five-year IF, estimates, mismatched journals and release-year confusion. Resolve print/electronic ISSN aliases through OpenAlex records rather than AI guesses.
+- Prevent references from replacing same-year publisher values or manual corrections. Preserve existing papers, source evidence, saved feedback, analyses and task checkpoints.
+
+官方来源无法核验时，可自动补充第三方 IF 参考值，单独标注年份、来源链接与参考身份；不覆盖同年份官方核验值或手动修正。支持纸质／电子版 ISSN 核对，保留旧资料及任务进度。
+
 ## 1.8.2 — 2026-10-27
 
 - Keep one journal IF task running across batches until all eligible journals have either a result or a recorded failure. Checkpoint cumulative progress, distinguish waiting from in-flight journals, and restore unfinished entries after interruption.
