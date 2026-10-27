@@ -7,6 +7,7 @@ import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 from .network import AppError, request, get_json, plain, doi, arxiv_id, TextParser
+from .search_queries import arxiv_query,crossref_queries
 
 _arxiv_lock=threading.Lock()
 _arxiv_last=0.0
@@ -78,7 +79,8 @@ def feed_records(body,kind,base):
 def collect(source,active,settings):
     global _arxiv_last
     terms=active['understanding'].get('queries') or active['understanding'].get('keywords_en') or active['understanding'].get('keywords_zh')
-    query=source.get('query') or (terms[0] if terms else '')
+    queries=[source['query']] if source.get('query') else (terms or [])[:3]
+    query=queries[0] if queries else ''
     if source['kind'] in ('crossref','arxiv') and not query.strip():raise AppError('missing_search_terms')
     limit=settings['max_per_source'];days=settings['lookback_days']
     until=dt.datetime.now(dt.timezone.utc)
@@ -88,14 +90,22 @@ def collect(source,active,settings):
         try:since=min(since,dt.datetime.fromisoformat(source['last_success'])-dt.timedelta(days=2))
         except ValueError:pass
     if source['kind']=='crossref':
-        params={'query.bibliographic':query,'filter':f'from-index-date:{since.date()},until-index-date:{until.date()}','sort':'indexed','order':'desc','rows':limit}
-        result=get_json('https://api.crossref.org/works?'+urllib.parse.urlencode(params))['message']
-        return [crossref_record(r) for r in result.get('items',[])],result.get('total-results',0)>limit
+        variants=list(dict.fromkeys(v for q in queries for v in crossref_queries(q)))
+        rows=[];seen=set();limited=len(variants)>limit
+        for index,variant in enumerate(variants):
+            size=limit//len(variants)+int(index<limit%len(variants))
+            if not size:continue
+            params={'query.bibliographic':variant,'filter':f'from-index-date:{since.date()},until-index-date:{until.date()}','sort':'score','order':'desc','rows':size}
+            result=get_json('https://api.crossref.org/works?'+urllib.parse.urlencode(params))['message']
+            limited=limited or result.get('total-results',0)>size
+            for r in result.get('items',[])[:size]:
+                record=crossref_record(r);key=record['doi'] or record['url']
+                if key not in seen:rows.append(record);seen.add(key)
+        return rows,limited
     if source['kind']=='arxiv':
-        # The query is literal text unless the user supplies an explicit arXiv query override.
+        # Preserve complete concept intersections; explicit native arXiv overrides stay intact.
         if not source.get('query'):
-            words=active['understanding'].get('keywords_en') or active['understanding'].get('keywords_zh') or terms
-            query=' OR '.join('all:"'+re.sub(r'["\\]',' ',x)+'"' for x in words[:6])
+            query=' OR '.join('('+arxiv_query(q)+')' for q in queries)
         query=f'({query}) AND lastUpdatedDate:[{since:%Y%m%d}0000 TO {until:%Y%m%d}2359]'
         params={'search_query':query,'sortBy':'lastUpdatedDate','sortOrder':'descending','start':0,'max_results':limit}
         body=arxiv_request('https://export.arxiv.org/api/query?'+urllib.parse.urlencode(params))

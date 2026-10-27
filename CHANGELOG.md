@@ -1,5 +1,14 @@
 # Changelog / 更新记录
 
+## 1.7.0 — 2026-10-27
+
+- Add bilingual SciSpace CSV/RIS/JSON preview and manual import into Library or a saved research history, with editable research questions and source provenance. Website/connector access is not presented as a standalone API integration.
+- Preserve DOI/URL identities, existing bibliography, feedback, analyses and trash; honor history year bounds and checkpoints. New history candidates can be assessed without repeating completed work.
+- Use complete planned queries in daily arXiv retrieval and relevance-ranked Crossref alternatives with a shared cap. Strengthen AI retrieval planning and abstract-based semantic assessment; papers without abstracts remain uncertain.
+- Document text-retrieval versus semantic-assessment limits and verify the UI with synthetic import records.
+
+新增 SciSpace 手动导入和中英文入口；改进候选检索及摘要语义评估。保留旧资料、分析和任务断点。尚未实现 SciSpace API 自动检索，也不声称已读取全文。
+
 ## 1.6.3 — 2026-10-27
 
 - Running and resumed tasks adopt the current model and reasoning effort on each unsent AI request within the same connection, including requests waiting for a slot and retries. Requests already dispatched retain their own settings. Provider and local endpoint changes do not redirect existing tasks.

@@ -44,5 +44,6 @@ jobs:
           node --check static/i18n.js
           node --check static/trash.js
           node --check static/execution.js
+          node --check static/scispace.js
       - name: Check UI state transitions
         run: node tests/test_ui.js

@@ -17,6 +17,7 @@ from .network import AppError
 from .service import Service
 from .storage import Store,encode,now
 from .metadata import parse_metrics_csv
+from .scispace import research_question,HOME as SCISPACE_HOME
 from . import startup
 
 
@@ -81,6 +82,15 @@ def make_server(app,port):
                 parsed=urllib.parse.urlsplit(self.path);path=parsed.path;q={k:v[0] for k,v in urllib.parse.parse_qs(parsed.query).items()}
                 if path=='/api/health':return self.json({'app':'AcademicUpdater','version':__version__})
                 if path=='/api/bootstrap':return self.json(app.bootstrap())
+                if path=='/api/scispace/context':
+                    if q.get('history_id'):
+                        try:hid=int(q['history_id'])
+                        except ValueError:raise AppError('invalid_setting')
+                        h=app.service.history.get(hid,False);scope=h['scope'];prompt=h['prompt']
+                    else:
+                        active=app.store.get('profile').get('active') or {};scope=active.get('understanding') or {};prompt=active.get('prompt','')
+                        if active.get('exclude'):prompt+='\nExplicit exclusions: '+active['exclude']
+                    return self.json({'question':research_question(scope,prompt,bool(q.get('history_id'))),'url':SCISPACE_HOME,'mode':'manual_import'})
                 if path=='/api/items':return self.json(app.store.items(q.get('q','')[:300],q.get('kind',''),q.get('saved')=='1',sort=q.get('sort','updated'),direction=q.get('direction'),daily=q.get('today')=='1',deleted=q.get('deleted')=='1' and q.get('today')!='1'))
                 if path=='/api/model-capabilities':return self.json(app.ai.capabilities({**app.store.settings(),'model':q.get('model',app.store.settings()['model'])}))
                 if path=='/api/histories':return self.json(app.service.history.list(deleted=q.get('deleted')=='1'))
@@ -116,7 +126,7 @@ def make_server(app,port):
                     try:enabled=app.oauth.callback(q);app.oauth.last_error='' if enabled else 'subscription_not_authorized'
                     except AppError as exc:app.oauth.last_error=exc.code
                     self.send_response(303);self.send_header('Location','/#ai');self.send_header('Content-Length','0');self.send_header('Cache-Control','no-store');self.end_headers();return
-                files={'/logo.png':'logo.png','/':'index.html','/index.html':'index.html','/app.js':'app.js','/history.js':'history.js','/trash.js':'trash.js','/execution.js':'execution.js','/i18n.js':'i18n.js','/styles.css':'styles.css','/guide':'guide.html'}
+                files={'/logo.png':'logo.png','/':'index.html','/index.html':'index.html','/app.js':'app.js','/history.js':'history.js','/trash.js':'trash.js','/execution.js':'execution.js','/scispace.js':'scispace.js','/i18n.js':'i18n.js','/styles.css':'styles.css','/guide':'guide.html'}
                 if path not in files:raise AppError('not_found',status=404)
                 file=static/files[path]
                 content=file.read_bytes()
@@ -171,11 +181,14 @@ def make_server(app,port):
                 if path=='/api/import':
                     if body.get('kind','paper') not in ('paper','industry','conference'):raise AppError('invalid_source_type')
                     return self.json({'job_id':app.service.start_job('import',{'value':str(body.get('value','')).strip()[:4000],'kind':body.get('kind','paper')})})
+                if path in ('/api/scispace/preview','/api/scispace/import'):return self.json(app.service.scispace_import(body,preview=path.endswith('/preview')))
                 if path=='/api/sources':app.service.add_source(body);return self.json(app.store.sources())
                 if re.fullmatch(r'/api/sources/\d+',path):
                     source_id=int(path.rsplit('/',1)[1])
                     with app.store.db() as c:
-                        if not c.execute('SELECT 1 FROM sources WHERE id=?',(source_id,)).fetchone():raise AppError('not_found',status=404)
+                        source=c.execute('SELECT kind FROM sources WHERE id=?',(source_id,)).fetchone()
+                        if not source:raise AppError('not_found',status=404)
+                        if source['kind']=='scispace_import' and body.get('enabled'):raise AppError('scispace_manual_source')
                         if 'enabled' in body:c.execute('UPDATE sources SET enabled=? WHERE id=?',(int(bool(body['enabled'])),source_id))
                         if 'query' in body:c.execute('UPDATE sources SET query=? WHERE id=?',(str(body['query']).strip()[:1000],source_id))
                     return self.json(app.store.sources())

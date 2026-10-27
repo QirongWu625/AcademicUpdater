@@ -6,7 +6,23 @@
 
 An AI-powered, local-first research assistant for tracking papers and industry updates, discovering influential and foundational work, and organizing a deduplicated personal library.
 
-**Version 1.6.3 · MIT license · Contributions welcome**
+**Version 1.7.0 · MIT license · Contributions welcome**
+
+## AI relevance and SciSpace
+
+The AI interprets the **whole research question**, proposes complementary search expressions and judges candidates against their **abstracts**, core problem, method, target and exclusions. Equivalent terminology can match without shared keywords. Broad discipline overlap alone does not mean high relevance. Papers without abstracts are marked **uncertain**; the app does not claim to read unavailable full text. Existing completed assessments are preserved rather than automatically reprocessed.
+
+Candidate retrieval from Crossref/arXiv is still **text search, not a semantic vector search engine**. Daily arXiv queries now retain complete concept intersections; Crossref uses all planned queries, ranks within the recent indexing window by relevance, and shares the source cap across alternatives. Search ranks are candidates, not AI assessments; no completeness or precision guarantee is implied.
+
+Choose **SciSpace** in Library or Research history, or open **Personal profile → Sources & schedule**. Copy the editable research question to [SciSpace](https://scispace.com/literature-review), run the search there, export **CSV or RIS**, and preview/import it here. Structured JSON with a `papers` array is also accepted. See the [official RIS export instructions](https://scispace.com/help/en/articles/10706857-how-to-export-citations-from-scispace-to-endnote) and this [synthetic CSV example](docs/examples/scispace.csv).
+
+- A website account or this chat's SciSpace connector does **not** configure a standalone API connection. This release supports **manual import**, not scheduled SciSpace retrieval. No browser session cookies or undocumented API endpoints are used.
+- Import at most 200 papers / 180 KB per file. Each record needs a title and DOI or HTTP(S) URL. Include abstracts, authors, journal and publication date where available. No journal impact factors are inferred.
+- Preview is read-only. Import merges by DOI/URL, preserves existing metadata, feedback and assessments, and does not resurrect trash. Invalid rows and identifiers, year exclusions and counts are reported. Imported data remains attributed to SciSpace, including the supplied question and import time.
+- A saved history must have a confirmed field and queries before importing. Pause that history's active task first; unrelated jobs may continue. Its year bounds are honored (undated records are skipped when bounded). New candidates invalidate the old timeline; **Review imported papers** assesses pending items when AI analysis is enabled. Importing into an unstarted draft creates an import-only review; existing search checkpoints remain intact.
+- Imported citation counts remain unverified source metadata, not Crossref citation evidence. Papers must pass the existing relevance and foundational-evidence criteria to enter the landmark shortlist. A search result is never automatically labeled foundational.
+
+![SciSpace export preview with synthetic records](docs/images/scispace-en.png)
 
 ## Automatic updates and parallel work
 

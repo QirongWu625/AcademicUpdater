@@ -22,3 +22,5 @@ main{margin:0 auto;align-self:start}.toolbar input[type=checkbox]{flex:none;min-
 .job-stack{margin:20px 0}.job-stack .job-banner{margin:8px 0}.job-events{margin-top:12px}.automation-status{padding:14px 0;border-bottom:1px solid var(--line);margin-bottom:16px}
 
 .concurrency-dialog{width:min(530px,94vw);padding:25px}.concurrency-dialog .toolbar{justify-content:flex-end;margin-top:20px}.job-stack .section-label{flex-wrap:wrap}.job-parallel{margin-top:4px}
+
+.ss-body{padding:24px}.ss-body textarea{min-height:130px}.ss-body .toolbar{margin:12px 0}.ss-evidence{padding:12px 15px;background:var(--soft);border-radius:7px}.ss-samples{padding-left:22px}.ss-samples li{padding:8px 0;border-bottom:1px solid var(--line)}.ss-samples p{margin:5px 0}

@@ -14,7 +14,7 @@ const context=vm.createContext({
   document:{addEventListener(){}},$:(selector)=>controls[selector],
   setTimeout,clearTimeout,structuredClone
 });
-for(const name of ['history.js','trash.js','execution.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'..','static',name),'utf8'),context);
+for(const name of ['history.js','trash.js','execution.js','scispace.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'..','static',name),'utf8'),context);
 vm.runInContext("const t=k=>COPY[k]?.[0]||k,esc=v=>String(v??''),btn=(a,l)=>'<button>'+t(l)+'</button>';",context);
 (async()=>{
   // A periodic refresh may supersede the click's list request. Controls must
@@ -89,5 +89,18 @@ vm.runInContext("const t=k=>COPY[k]?.[0]||k,esc=v=>String(v??''),btn=(a,l)=>'<bu
   closed=false;refreshed=false;context.api=async()=>{throw new Error('offline')};
   await assert.rejects(vm.runInContext("saveConcurrency({ai_concurrency:'8'})",context),/offline/);
   assert.equal(closed,false);assert.equal(refreshed,false);assert.equal(vm.runInContext('S.boot.settings.ai_concurrency',context),6);
-  console.log('UI state regression checks passed (filters, trash, parallel jobs, collection progress, upgrade notice).');
+  // A late question response must not overwrite the user's edits or target.
+  controls['#ss-target']={value:'1'};controls['#ss-question']={value:'my question'};
+  controls['#ss-preview']={innerHTML:'old preview'};controls['#ss-import']={disabled:false};controls['#scispace-dialog']={open:true};
+  let resolveQuestion;context.api=()=>new Promise(resolve=>{resolveQuestion=resolve});
+  const questionLoad=vm.runInContext('scispaceContext()',context);
+  vm.runInContext('invalidateSciSpace()',context);controls['#ss-question'].value='My edited question';
+  resolveQuestion({question:'stale generated question'});await questionLoad;
+  assert.equal(controls['#ss-question'].value,'My edited question');assert.equal(controls['#ss-import'].disabled,true);
+  // Repeated clicks while an import is active must not submit a second write.
+  let writes=0;context.api=async()=>{writes++};
+  vm.runInContext("SS.busy=true;SS.preview={content:'data'}",context);
+  await vm.runInContext('importSciSpace()',context);assert.equal(writes,0);
+  html=vm.runInContext('scispacePanel()',context);assert.match(html,/Manual import/);assert.match(html,/does not provide an API/);
+  console.log('UI state regression checks passed (filters, trash, parallel jobs, collection progress, SciSpace drafts and duplicate submissions).');
 })().catch(error=>{console.error(error);process.exitCode=1});

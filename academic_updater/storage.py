@@ -200,7 +200,7 @@ class Store:
         with self.db() as c:
             c.execute('UPDATE sources SET last_status=?,last_error=?,last_success=CASE WHEN ?=\'ok\' THEN ? ELSE last_success END WHERE id=?', (status,detail,status,now(),source_id))
 
-    def ingest(self, source_id, record, historical=False):
+    def ingest(self, source_id, record, historical=False,preserve_metadata=False):
         title = str(record.get('title','')).strip()[:2000]
         if not title:
             raise AppError('missing_title')
@@ -267,6 +267,10 @@ class Store:
             else:
                 c.execute('UPDATE items SET last_seen=? WHERE id=?',(stamp,item_id))
             meta=bibliography(record)
+            if preserve_metadata and not is_new:
+                for key in ('journal','journal_key','venue_type','author_sort'):
+                    if current[key] and current[key]!='unknown':meta[key]=current[key]
+                if json.loads(current['issns']):meta['issns']=json.loads(current['issns'])
             if not older and not current['published_at'] and record.get('published_at'):c.execute('UPDATE items SET published_at=? WHERE id=?',(record['published_at'],item_id))
             if not older:
                 if current['journal'] and not meta['journal']:meta['venue_type']='unknown'
