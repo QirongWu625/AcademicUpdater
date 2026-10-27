@@ -66,6 +66,7 @@ class Store:
             c.execute("INSERT INTO run_events(run_id,at,event,detail) SELECT id,?,'interrupted','process_exit_or_shutdown' FROM runs WHERE status='running'",(now(),))
             c.execute("UPDATE runs SET status='interrupted',finished_at=?,error='Application stopped before this run completed.' WHERE status='running'", (now(),))
             c.execute("UPDATE analysis_tasks SET status='pending',error='interrupted',updated_at=? WHERE status='running'",(now(),))
+            c.execute("UPDATE journal_lookups SET status='pending',error='',retry_at=NULL WHERE status='running'")
             c.execute("UPDATE ai_usage SET status='interrupted' WHERE status='started'")
 
     def _migrate(self,c):

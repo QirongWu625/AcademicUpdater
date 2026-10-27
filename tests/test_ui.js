@@ -97,6 +97,21 @@ assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'..','static','index.htm
   closed=false;refreshed=false;context.api=async()=>{throw new Error('offline')};
   await assert.rejects(vm.runInContext("saveConcurrency({ai_concurrency:'8'})",context),/offline/);
   assert.equal(closed,false);assert.equal(refreshed,false);assert.equal(vm.runInContext('S.boot.settings.ai_concurrency',context),6);
+  // Profile counters refresh independently of the settings form, including idle gaps.
+  vm.runInContext("S.page='profile';S.boot={settings:{auto_if:true,model:'test'},jobs:[],execution:{},journal_metrics_status:{pending:68,found:31}}",context);
+  assert.equal(vm.runInContext('shouldPoll()',context),true);
+  const expanded={open:true},metricPanel={innerHTML:'',querySelector(){return expanded}};
+  controls['#journal-lookup-status']=metricPanel;controls['[data-action="metrics-refresh"]']={textContent:''};
+  vm.runInContext('syncMetricProgress()',context);assert.match(metricPanel.innerHTML,/Awaiting lookup: 68/);
+  const refreshCode=fs.readFileSync(path.join(__dirname,'..','static/app.js'),'utf8').split('\n').find(l=>l.startsWith('async function refreshVisible('));
+  vm.runInContext(refreshCode,context);
+  context.bootstrap=async()=>{vm.runInContext("S.boot.journal_metrics_status={pending:27,running:8,found:31,error:30,unavailable:3};S.boot.jobs=[{id:100,kind:'journal_metrics',status:'running',progress:{journal_counts:{processed:41,found:0,failed:36,unavailable:5}},ai_state:null}]",context)};
+  await vm.runInContext('refreshVisible()',context);
+  assert.match(metricPanel.innerHTML,/Awaiting lookup: 27/);assert.match(metricPanel.innerHTML,/Querying: 8/);assert.match(metricPanel.innerHTML,/Lookup errors: 30/);
+  assert.equal(controls['[data-action="metrics-refresh"]'].textContent,'View IF query progress');assert.match(metricPanel.innerHTML,/Processed this run: 41/);assert.equal(expanded.open,true);
+  vm.runInContext("S.page='today';S.boot.jobs=[];S.boot.journal_metrics_status={pending:1}",context);assert.equal(vm.runInContext('shouldPoll()',context),true);
+  vm.runInContext("S.boot.journal_metrics_status={pending:0,error:68}",context);assert.equal(vm.runInContext('shouldPoll()',context),false);
+  assert.match(vm.runInContext("jobStatus({kind:'journal_metrics',status:'complete',result:{failed:68}})",context),/Run finished/);
   console.log('UI state regression checks passed (filters, trash, parallel jobs, collection progress, profile data controls).');
 })().catch(error=>{console.error(error);process.exitCode=1});
 

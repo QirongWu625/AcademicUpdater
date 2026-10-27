@@ -26,5 +26,20 @@ class CollectAPITests(unittest.TestCase):
         bootstrap=json.loads(self.fetch('/api/bootstrap'));self.assertEqual(bootstrap['local_day'],self.app.service.local_day())
         html=self.fetch('/');self.assertIn('name="academic-version" content="'+__version__+'"',html);self.assertNotIn('__APP_VERSION__',html)
 
+    def test_metrics_refresh_returns_existing_run_without_resetting_failures(self):
+        with self.app.store.db() as c:c.execute("INSERT INTO journal_lookups(journal_key,journal,updated_at) VALUES('example','Example','2026-10-27')")
+        started=threading.Event();release=threading.Event()
+        def run(*args):started.set();release.wait(5);return {}
+        with patch.object(self.app.service.journals,'run',side_effect=run):
+            try:
+                first=json.loads(self.fetch('/api/metrics/refresh',{}));self.assertTrue(started.wait(2))
+                with self.app.store.db() as c:c.execute("UPDATE journal_lookups SET status='error',error='metric_not_found',retry_at='2099'")
+                second=json.loads(self.fetch('/api/metrics/refresh',{}))
+                self.assertEqual(first['job_id'],second['job_id']);self.assertTrue(second['already_running'])
+                self.assertEqual(json.loads(self.fetch('/api/bootstrap'))['journal_metrics_status'],{'error':1})
+            finally:
+                release.set();end=time.monotonic()+5
+                while self.app.service.lock.locked() and time.monotonic()<end:time.sleep(.01)
+
 
 if __name__=='__main__':unittest.main()

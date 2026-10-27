@@ -245,22 +245,38 @@ class JournalLookup:
         return verify_result(result,journal,issns)
 
     def run(self,job,settings):
-        counts={'found':0,'unavailable':0,'errors':[]};guard=threading.Lock()
+        from .execution import BLOCKED
+        previous=self.store.job(job)['progress'].get('journal_counts',{})
+        counts={key:previous.get(key,0) for key in ('found','unavailable','failed','processed')};guard=threading.Lock()
         def lookup(row):
-            key=row['journal_key'];issns=json.loads(row['issns'])
+            key=row['journal_key']
             self.service._check_pause(job)
-            self.service._checkpoint(job,phase='journal_metrics',current_title=row['journal'])
+            with self.store.db() as c:c.execute("UPDATE journal_lookups SET status='running' WHERE journal_key=?",(key,))
             try:
-                metric=self.find(job,settings,row['journal'],issns)
-                self.store.save_metrics([metric],automatic=True)
-                status='found';error='';evidence=encode(metric)
-                with guard:counts['found']+=1
-            except AppError as exc:
-                if exc.code in ('daily_ai_limit','ai_not_connected','model_not_selected','subscription_not_authorized','sign_in_again'):raise
-                status='unavailable' if exc.code in ('metric_not_found','metric_unverified','web_search_unavailable') else 'error'
-                error=exc.code;evidence=encode({'error':exc.code,'detail':exc.detail})
-                with guard:counts['unavailable']+=1
-            retry=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(days=7 if status=='unavailable' else 1 if status=='error' else 180)).isoformat()
-            with self.store.db() as c:c.execute('UPDATE journal_lookups SET status=?,error=?,evidence=?,updated_at=?,retry_at=? WHERE journal_key=?',(status,error,evidence,now(),retry,key))
-        self.service.parallel_work(job,self.pending(),lookup)
+                self.service._checkpoint(job,phase='journal_metrics',current_title=row['journal'])
+                try:
+                    issns=json.loads(row['issns'])
+                    metric=self.find(job,settings,row['journal'],issns)
+                    self.store.save_metrics([metric],automatic=True)
+                    status='found';error='';evidence=encode(metric)
+                except AppError as exc:
+                    if exc.code in BLOCKED-{'web_search_unavailable'}:raise
+                    status='unavailable' if exc.code in ('metric_not_found','metric_unverified','web_search_unavailable') else 'error'
+                    error=exc.code;evidence=encode({'error':exc.code,'detail':exc.detail})
+                except (ValueError,TypeError,KeyError) as exc:
+                    status='error';error='metric_invalid_data';evidence=encode({'error':error,'detail':type(exc).__name__})
+                retry=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(days=7 if status=='unavailable' else 1 if status=='error' else 180)).isoformat()
+                with self.store.db() as c:c.execute('UPDATE journal_lookups SET status=?,error=?,evidence=?,updated_at=?,retry_at=? WHERE journal_key=?',(status,error,evidence,now(),retry,key))
+                with guard:
+                    counts[{'found':'found','unavailable':'unavailable','error':'failed'}[status]]+=1;counts['processed']+=1
+                    self.service._checkpoint(job,journal_counts=dict(counts))
+            finally:
+                # Pauses, authentication failures and process shutdown leave
+                # unfinished journals eligible for a later resume.
+                with self.store.db() as c:c.execute("UPDATE journal_lookups SET status='pending' WHERE journal_key=? AND status='running'",(key,))
+        while True:
+            self.service._check_pause(job)
+            rows=self.pending(max(10,self.store.settings()['ai_concurrency']))
+            if not rows:break
+            self.service.parallel_work(job,rows,lookup)
         return counts

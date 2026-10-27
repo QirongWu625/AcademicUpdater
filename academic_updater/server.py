@@ -152,9 +152,7 @@ def make_server(app,port):
                     origin='ai' if current['origin']=='ai' and current['understanding']==u and current['understanding_revision']==body.get('revision') else 'manual'
                     return self.json(app.store.apply_profile(body.get('revision'),u,origin))
                 if path=='/api/dataset/clear':return self.json(app.service.clear_dataset(body.get('confirmation')))
-                if path=='/api/metrics/refresh':
-                    app.service.journals.retry_missing()
-                    return self.json({'job_id':app.service.start_job('journal_metrics')})
+                if path=='/api/metrics/refresh':return self.json(app.service.refresh_metrics())
                 if path=='/api/settings':return self.json(app.service.save_settings(body))
                 if path=='/api/startup':return self.json(startup.configure(bool(body.get('enabled'))))
                 if path=='/api/settings/key':

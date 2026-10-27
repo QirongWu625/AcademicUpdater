@@ -1,5 +1,14 @@
 # Changelog / 更新记录
 
+## 1.8.2 — 2026-10-27
+
+- Keep one journal IF task running across batches until all eligible journals have either a result or a recorded failure. Checkpoint cumulative progress, distinguish waiting from in-flight journals, and restore unfinished entries after interruption.
+- Make repeated Retry clicks return the active task without resetting its failures or creating competing jobs. Empty queues do not create placeholder runs.
+- Refresh IF counts and failure details in Profile and Sources without overwriting unsaved settings. Keep observing automatic work between batches and show processed/found/unavailable/failed counts.
+- Preserve manual pauses and authentication/budget barriers with visible reasons. A broken journal record does not stop other journals; unrelated scheduler errors no longer prevent IF scheduling.
+
+修复个人资料中 IF 数字不刷新、重试重置运行中队列的问题；同一任务持续处理全部待查期刊，显示等待、查询中、已查到及失败进度，保留暂停恢复与旧资料。
+
 ## 1.8.1 — 2026-10-27
 
 - Fix OpenAlex daily semantic requests: use the supported publication-year filter, then enforce the exact date window locally. Resume previously failed sources even when an older run saved its phase as analysis; keep successful sources and finished assessments.

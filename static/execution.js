@@ -59,6 +59,7 @@ Object.assign(ERRORS,{
 
 let jobStates=new Map(),jobPollActive=false,profileViewChanged=false;
 function runningJobs(){return (S.boot?.jobs||[]).filter(r=>r.status==='running')}
+function shouldPoll(){return !!(runningJobs().length||['profile','sources'].includes(S.page)||(S.boot?.settings.auto_if&&(S.boot?.journal_metrics_status?.pending||S.boot?.journal_metrics_status?.running)))}
 function activeCollection(){return runningJobs().find(r=>r.kind==='collect'&&r.argument?.input?.day===S.boot.local_day)}
 function collectionButton(){const r=activeCollection();return r?btn('view-collection','viewCollection',true,`data-id="${r.id}"`):btn('collect','collect',true)}
 function syncCollectionButtons(){document.querySelectorAll('[data-action="collect"],[data-action="view-collection"]').forEach(el=>{el.outerHTML=collectionButton()})}
@@ -103,26 +104,27 @@ function syncJobs(){
     jobStates.set(r.id,r.status);
   }
   syncCollectionButtons();const notice=$('#app-update');if(notice)notice.outerHTML=versionNotice();
-  if(runningJobs().length)poll();
+  if(shouldPoll())poll();
 }
 async function job(path,body={},kind){
-  const result=await api(path,body);jobStates.set(result.job_id,'running');
+  const result=await api(path,body);if(result.empty){await bootstrap();await render();notify(t('metricNoPending'));return}jobStates.set(result.job_id,'running');
   if(!result.already_running)notify(t('jobWorking'));
-  await bootstrap();await render();if(result.already_running)focusCollection(result.job_id);poll();
+  await bootstrap();await render();if(result.already_running){if(kind==='journal_metrics'){notify(t('metricAlreadyRunning'));$('#job-card-'+result.job_id)?.scrollIntoView({behavior:'smooth',block:'center'})}else focusCollection(result.job_id)}poll();
 }
 function poll(){
   if(jobPollActive)return;jobPollActive=true;
   pollTimer=setTimeout(async()=>{
     try{await refreshVisible();if(profileViewChanged&&S.page==='research'&&!S.dirty&&!S.scopeEdited){profileViewChanged=false;await render()}}
     catch(e){fail(e)}
-    finally{jobPollActive=false;if(runningJobs().length)poll()}
-  },2000);
+    finally{jobPollActive=false;if(shouldPoll())poll()}
+  },runningJobs().length?2000:5000);
 }
 function resumable(r){return ['collect','analyze','history_plan','history_search','item_analysis','interpret','journal_metrics'].includes(r.kind)&&(['paused','interrupted','failed'].includes(r.status)||(r.status==='partial'&&!!(r.result?.errors?.length||r.result?.analysis?.errors?.length)))}
 function jobControls(r){const p=r.progress||{};return r.status==='running'?btn('pause-job','pauseJob',false,`data-id="${r.id}" ${p.pause_requested?'disabled':''}`):resumable(r)?btn('resume-job','resumeJob',false,`data-id="${r.id}" data-kind="${r.kind}"`):''}
-function jobStatus(r){return t(r.kind==='collect'&&r.status==='complete'&&r.result?.truncated?.length?'completeLimited':r.status)}
+function jobStatus(r){if(r.kind==='journal_metrics'&&r.status==='complete'&&(r.result?.failed||r.result?.unavailable))return t('metricRunFinished');return t(r.kind==='collect'&&r.status==='complete'&&r.result?.truncated?.length?'completeLimited':r.status)}
 function jobInfo(r){
   const p=r.progress||{},q=r.queue||{};
+  if(r.kind==='journal_metrics'){const c=p.journal_counts||r.result||{};return `${t('metricProcessed')}: ${c.processed||0} · ${t('metricFound')}: ${c.found||0} · ${t('metricUnavailable')}: ${c.unavailable||0} · ${t('metricErrors')}: ${c.failed||0}`}
   return r.kind.startsWith('history_')?`${p.history_collected||0} ${t('historyCollected')} · ${p.history_analyzed||0} ${t('historyAnalyzed')}`:q.total?`${q.completed||0} / ${q.total}`:t(p.phase||r.status);
 }
 function jobReason(r){const p=r.progress||{};return `${r.error?`<p class="small warning">${esc(errorText(r.error.split(':')[0],r.error.split(':').slice(1).join(':').trim()))}</p>`:''}${p.pause_requested&&r.status==='running'?`<p class="small">${esc(t('pauseWaiting'))}</p>`:''}${p.retry_at&&r.status!=='running'&&S.boot.settings.auto_resume?`<p class="small">${esc(t('retryAt'))}: ${esc(displayDate(p.retry_at))} · ${esc(new Date(p.retry_at).toLocaleTimeString(lang()))}</p>`:''}${p.next_attempt_at?`<p class="small">${esc(t('requestRetryAt'))}: ${esc(new Date(p.next_attempt_at).toLocaleTimeString(lang()))}</p>`:''}${p.profile_learning?.status==='deferred'?`<p class="small warning">${esc(t('learningDeferred'))} ${esc(errorText(p.profile_learning.error))}</p>`:''}`}

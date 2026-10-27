@@ -43,6 +43,17 @@ class Service:
             if existing is not None:return {'job_id':existing,'already_running':True}
             return {'job_id':self.start_job('collect',{'day':day}),'already_running':False}
 
+    def refresh_metrics(self):
+        # Repeated clicks must not reset failures while another worker drains
+        # the queue, or create competing batches with the scheduler.
+        with self.guard:
+            existing=next((job for job,w in self.workers.items() if w['group'][0]=='journal_metrics'),None)
+            if existing is not None:return {'job_id':existing,'already_running':True}
+            if len(self.workers)>=16:raise AppError('too_many_jobs',status=409)
+            self.journals.retry_missing()
+            if not self.journals.pending(1):return {'job_id':None,'empty':True}
+            return {'job_id':self.start_job('journal_metrics'),'already_running':False}
+
     def _claim(self,kind,argument):
         group=self.group(kind,argument)
         if any(w['group']==group for w in self.workers.values()):raise AppError('job_already_running',status=409)
@@ -404,12 +415,12 @@ class Service:
 
     def scheduler(self):
         while not self.stop.is_set():
-            try:
-                self.schedule_tick();self.recover_interrupted();self.retry_tick();self.metrics_tick()
-                self.store.put('scheduler_status',{'checked_at':now(),'error':None})
-            except Exception as exc:
-                try:self.store.put('scheduler_status',{'checked_at':now(),'error':exc.code if isinstance(exc,AppError) else type(exc).__name__})
-                except Exception:pass
+            errors=[]
+            for task in (self.schedule_tick,self.recover_interrupted,self.retry_tick,self.metrics_tick):
+                try:task()
+                except Exception as exc:errors.append(exc.code if isinstance(exc,AppError) else type(exc).__name__)
+            try:self.store.put('scheduler_status',{'checked_at':now(),'error':'; '.join(errors) or None})
+            except Exception:pass
             self.stop.wait(20)
 
     def retry_tick(self,current=None):

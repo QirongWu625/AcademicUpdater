@@ -6,7 +6,7 @@
 
 An AI-powered, local-first research assistant for tracking papers and industry updates, discovering influential and foundational work, and organizing a deduplicated personal library.
 
-**Version 1.8.1 · MIT license · Contributions welcome**
+**Version 1.8.2 · MIT license · Contributions welcome**
 
 ## Semantic discovery and author searches
 
@@ -165,3 +165,5 @@ See [architecture](docs/ARCHITECTURE.md), [changes](CHANGELOG.md), and [security
 Daily collection uses supported OpenAlex semantic filters and checks the exact date window locally. Reaching a candidate cap is a completed run with limited coverage; failed sources can be resumed without repeating successful collection or completed analyses.
 
 Automatic IF includes the metric year and publisher source. Directly accessible pages are checked against the original text, journal identity and JIF table column. When the publisher denies direct access, two independent AI web reads must agree, each backed by an actual page-open event, explicit dated JIF and ISSN. These are labeled **AI web sources**; they remain model-extracted evidence, not a licensed JCR feed or an exact local HTML verification. Conflicting or unsupported values remain missing. Profile shows recent lookup issues, and Refresh immediately retries missing values. Manual corrections are preserved.
+
+IF lookup drains the eligible queue in one continuous task. Repeated Retry clicks show the active task without requeuing failures. Profile counts update live, including waiting, querying, found, unavailable and failed. Failed entries retain their retry cooldown; manual pauses, sign-in problems and usage limits remain visible barriers.
