@@ -6,7 +6,7 @@
 
 An AI-powered, local-first research assistant for tracking papers and industry updates, discovering influential and foundational work, and organizing a deduplicated personal library.
 
-**Version 1.8.0 · MIT license · Contributions welcome**
+**Version 1.8.1 · MIT license · Contributions welcome**
 
 ## Semantic discovery and author searches
 
@@ -159,3 +159,9 @@ node --check static/i18n.js
 Node.js is needed only for the JavaScript syntax checks, not for running the application. Tests use isolated temporary databases and mocked provider responses; they do not require personal AI credentials. GitHub Actions is configured to run backend tests and syntax checks on Windows and Ubuntu with Python 3.11 and 3.13.
 
 See [architecture](docs/ARCHITECTURE.md), [changes](CHANGELOG.md), and [security guidance](SECURITY.md). The code is licensed under [MIT](LICENSE). Third-party content and services remain subject to their own terms.
+
+### Collection recovery and journal metrics
+
+Daily collection uses supported OpenAlex semantic filters and checks the exact date window locally. Reaching a candidate cap is a completed run with limited coverage; failed sources can be resumed without repeating successful collection or completed analyses.
+
+Automatic IF includes the metric year and publisher source. Directly accessible pages are checked against the original text, journal identity and JIF table column. When the publisher denies direct access, two independent AI web reads must agree, each backed by an actual page-open event, explicit dated JIF and ISSN. These are labeled **AI web sources**; they remain model-extracted evidence, not a licensed JCR feed or an exact local HTML verification. Conflicting or unsupported values remain missing. Profile shows recent lookup issues, and Refresh immediately retries missing values. Manual corrections are preserved.

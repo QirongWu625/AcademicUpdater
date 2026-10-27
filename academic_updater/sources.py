@@ -96,7 +96,7 @@ def collect(source,active,settings):
         for index,q in enumerate(queries):
             cap=min(50,limit//len(queries)+int(index<limit%len(queries)))
             if not cap:limited=True;continue
-            found,state=discovery_page(q,{}, {'mode':'semantic','since':str(since.date())},cap)
+            found,state=discovery_page(q,{}, {'mode':'semantic','since':str(since.date()),'until':str(until.date())},cap)
             limited=limited or state['source_limited']
             for row in found:
                 key=row['doi'] or row['external_id']

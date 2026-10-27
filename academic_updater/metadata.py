@@ -64,5 +64,5 @@ def attach_metric(item,metrics):
     exact=[m for m in metrics if (item.get('journal_key') and m['journal_key']==item['journal_key']) or set(item.get('issns',[]))&set(m['issns'])]
     if exact:
         chosen=max(exact,key=lambda m:(m['year'],m['id']))
-        item.update(impact_factor=chosen['impact_factor'],if_year=chosen['year'],if_source=chosen['source'],if_source_url=chosen['source_url'],if_status='automatic' if chosen.get('origin')=='automatic' else 'provided',if_evidence=chosen.get('evidence_quote',''))
+        item.update(impact_factor=chosen['impact_factor'],if_year=chosen['year'],if_source=chosen['source'],if_source_url=chosen['source_url'],if_status=('web_sourced' if chosen.get('verification')=='ai_web' else 'automatic') if chosen.get('origin')=='automatic' else 'provided',if_evidence=chosen.get('evidence_quote',''))
     return item

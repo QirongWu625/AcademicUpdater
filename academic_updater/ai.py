@@ -64,7 +64,7 @@ def response_text(response):
 
 
 def parse_stream(response,with_response=False):
-    chunks=[];completed=None;size=0;event=[]
+    chunks=[];completed=None;size=0;event=[];items={}
     with response:
         for line in response:
             size+=len(line)
@@ -79,9 +79,16 @@ def parse_stream(response,with_response=False):
             try:e=json.loads(raw)
             except ValueError:raise AppError('invalid_ai_output',status=502)
             if e.get('type')=='response.output_text.delta':chunks.append(e.get('delta',''))
+            elif e.get('type')=='response.output_item.done' and isinstance(e.get('item'),dict):
+                item=e['item'];items[item.get('id') or e.get('output_index',len(items))]=item
             elif e.get('type')=='response.completed':completed=e.get('response',{});break
             elif e.get('type') in ('response.failed','response.incomplete','error'):raise AppError('ai_request_failed','The AI response did not complete.',502)
     if completed is None:raise AppError('ai_stream_interrupted',status=502)
+    # Some direct sign-in streams send completed output items separately and
+    # leave response.completed.output empty. Retain actual tool calls/citations.
+    if items:
+        output=completed.get('output') or [];ids={i.get('id') for i in output if i.get('id')}
+        completed={**completed,'output':output+[v for k,v in items.items() if k not in ids]}
     text=response_text(completed) or ''.join(chunks)
     return (text,completed) if with_response else text
 
@@ -146,8 +153,10 @@ class AI:
                 calls=[x for x in web_response.get('output',[]) if x.get('type')=='web_search_call' and x.get('status')=='completed']
                 if not calls:raise AppError('web_search_unavailable')
                 urls={s.get('url') for call in calls for s in call.get('action',{}).get('sources',[]) if s.get('url')}
+                urls.update(call['action']['url'] for call in calls if call.get('action',{}).get('url'))
                 urls.update(a['url'] for x in web_response.get('output',[]) for part in x.get('content',[]) for a in part.get('annotations',[]) if a.get('type')=='url_citation' and a.get('url'))
                 result['_web_sources']=sorted(urls)
+                result['_web_opened']=[c['action']['url'] for c in calls if c.get('action',{}).get('type')=='open_page' and c['action'].get('url')]
             self.store.finish_ai(usage,'completed');return result
         except AppError:
             self.store.finish_ai(usage,'failed');raise

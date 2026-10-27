@@ -89,7 +89,13 @@ class Service:
                     progress['phase']='analysis' if had_analysis or row['kind']=='analyze' else 'collection'
                 progress.pop('pause_requested',None);progress.pop('retry_at',None)
                 progress['auto_retries']=(progress.get('auto_retries',0)+int(progress.get('retry_reason')!='daily_ai_limit')) if automatic else 0
-                if row['kind']=='collect' and progress.get('collection_retry'):progress['phase']='collection'
+                if row['kind']=='collect':
+                    # Older runs marked permanent source errors as done. A user
+                    # retry must re-open these sources without repeating successes.
+                    failed={int(k) for k in progress.get('source_errors',{}) if str(k).isdigit()}
+                    if failed or progress.get('collection_retry'):
+                        progress['phase']='collection'
+                        progress['sources_done']=[i for i in progress.get('sources_done',[]) if i not in failed]
                 with self.store.db() as c:
                     c.execute("UPDATE runs SET status='running',finished_at=NULL,error=NULL,argument=?,progress=? WHERE id=?",(encode(argument),encode(progress),job))
                     c.execute("UPDATE analysis_tasks SET status='pending',error=NULL WHERE run_id=? AND status IN ('running','failed')",(job,))
@@ -240,7 +246,7 @@ class Service:
                 result=self.store.ingest(0,import_link(payload['input']['value'],payload['input'].get('kind','paper')))
                 if result.get('deleted'):raise AppError('item_in_trash')
             else:raise AppError('invalid_job')
-            partial=result.get('errors') or result.get('truncated') or result.get('analysis',{}).get('errors')
+            partial=result.get('errors') or result.get('analysis',{}).get('errors') or (kind!='collect' and result.get('truncated'))
             with self.store.db() as c:c.execute('UPDATE runs SET status=?,finished_at=?,result=?,error=NULL WHERE id=?',('partial' if partial else 'complete',now(),encode(result),job))
             if self.store.job(job)['progress'].get('source_retry') or self.store.job(job)['progress'].get('collection_retry'):
                 self._arrange_retry(job,AppError('network_error','Some sources are temporarily unavailable.'))
@@ -332,7 +338,7 @@ class Service:
             except AppError as exc:
                 detail=exc.code+': '+exc.detail;source_errors[str(source['id'])]=source['name']+': '+detail;self.store.source_status(source['id'],'error',detail)
                 if transient(exc):retry_sources.append(source['id'])
-            if source['id'] not in retry_sources:done.append(source['id'])
+            if str(source['id']) not in source_errors:done.append(source['id'])
             result['errors']=list(source_errors.values())
             self._checkpoint(job,collection=result,sources_done=done,source_errors=source_errors,collection_retry=bool(retry_sources))
         self._checkpoint(job,phase='analysis')

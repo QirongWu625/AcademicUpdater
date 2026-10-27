@@ -39,6 +39,26 @@ class ExecutionTests(unittest.TestCase):
             while self.store.job(daily)['status']=='running' and time.monotonic()<end:time.sleep(.02)
             self.assertEqual(self.store.job(daily)['status'],'complete');self.assertEqual(self.store.job(history_job)['status'],'running')
             release.set();self.wait()
+
+    def test_resume_legacy_failed_source_from_analysis_and_keep_finished_work(self):
+        item=self.add(99);save_analysis(self.store,item,profile=self.store.get('profile')['active'],settings=self.store.settings())
+        sources=self.store.sources();failed=sources[-1]['id']
+        payload={'input':{'day':'2026-10-27'},'profile':self.store.get('profile')['active'],'settings':self.store.settings()}
+        progress={'phase':'analysis','collection_started':True,'sources_done':[x['id'] for x in sources],'source_errors':{str(failed):'OpenAlex: HTTP 400'},'collection_retry':False,'collection':{'new':1,'updated':0,'duplicates':0,'errors':['OpenAlex: HTTP 400'],'truncated':['Crossref']}}
+        with self.store.db() as c:job=c.execute("INSERT INTO runs(kind,status,started_at,argument,progress) VALUES('collect','partial',?,?,?)",(now(),encode(payload),encode(progress))).lastrowid
+        with patch('academic_updater.service.collect',return_value=([],False)) as collect,patch.object(self.ai,'analyze',create=True) as analyze:
+            self.service.resume(job);self.wait()
+        self.assertEqual(collect.call_count,1);self.assertEqual(collect.call_args.args[0]['id'],failed);analyze.assert_not_called()
+        run=self.store.job(job);self.assertEqual(run['status'],'complete');self.assertEqual(run['result']['errors'],[])
+        self.assertEqual(run['result']['new'],1);self.assertEqual(run['result']['truncated'],['Crossref'])
+
+    def test_daily_cap_alone_is_complete_and_failed_source_is_not_done(self):
+        with patch('academic_updater.service.collect',return_value=([],True)):
+            job=self.service.start_job('collect');self.wait()
+        self.assertEqual(self.store.job(job)['status'],'complete')
+        with patch('academic_updater.service.collect',side_effect=AppError('upstream_http_error','HTTP 400')):
+            job=self.service.start_job('collect');self.wait()
+        run=self.store.job(job);self.assertEqual(run['status'],'partial');self.assertEqual(run['progress']['sources_done'],[])
     def test_simultaneous_collection_clicks_share_one_active_run(self):
         started=threading.Event();release=threading.Event()
         def collect(*args):started.set();release.wait(5);return [],False

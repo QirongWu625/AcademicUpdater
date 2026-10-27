@@ -88,10 +88,16 @@ def work_record(row):
 
 def discovery_page(query,config,state,size=100):
     size=min(size,100);filters=[]
-    if config.get('year_from'):filters.append('from_publication_date:'+str(config['year_from'])+'-01-01')
-    if config.get('year_to'):filters.append('to_publication_date:'+str(config['year_to'])+'-12-31')
-    if state.get('since'):filters.append('from_publication_date:'+state['since'])
     semantic=state.get('mode')!='author';position=state.get('position',0)
+    lower=state.get('since') or (str(config['year_from'])+'-01-01' if config.get('year_from') else '')
+    upper=state.get('until') or (str(config['year_to'])+'-12-31' if config.get('year_to') else '')
+    if semantic:
+        # The live vector endpoint accepts publication_year, not date filters.
+        # Apply exact day bounds locally after the year-filtered retrieval.
+        if lower or upper:filters.append('publication_year:'+(lower[:4] if lower else '')+'-'+(upper[:4] if upper else ''))
+    else:
+        if lower:filters.append('from_publication_date:'+lower)
+        if upper:filters.append('to_publication_date:'+upper)
     if semantic:
         size=min(size,50-position)
         if size<=0:return [],{'position':position,'done':True,'source_limited':True,'total':50}
@@ -103,15 +109,19 @@ def discovery_page(query,config,state,size=100):
         filters.append('authorships.author.id:'+identifier.rsplit('/',1)[1])
         page_size=state.get('page_size',size);params={'per_page':page_size,'page':state.get('page',1),'sort':'publication_date:desc'}
     if filters:params['filter']=','.join(filters)
-    data=openalex('works',params,semantic=semantic);raw=data.get('results',[]);records=[];rejected=0
+    data=openalex('works',params,semantic=semantic);raw=data.get('results',[]);records=[];rejected=0;date_filtered=0
     for row in raw:
+        if semantic and (lower or upper):
+            date=row.get('publication_date') or ''
+            if not re.fullmatch(r'\d{4}-\d{2}-\d{2}',date) or lower and date<lower or upper and date>upper:
+                date_filtered+=1;continue
         if not semantic and not any(a.get('author',{}).get('id')==state['author_id'] for a in row.get('authorships',[])):
             rejected+=1;continue
         if row.get('title') or row.get('display_name'):records.append(work_record(row))
     total=data.get('meta',{}).get('count',len(raw));position+=len(raw)
     next_state={'position':position,'total':total,'done':semantic or not raw or position>=min(total,10000),
                 'source_limited':bool(semantic and total>=size or not semantic and total>10000 and position>=10000),
-                'identity_rejected':state.get('identity_rejected',0)+rejected}
+                'identity_rejected':state.get('identity_rejected',0)+rejected,'date_filtered':state.get('date_filtered',0)+date_filtered}
     if not semantic:next_state.update(page=params['page']+1,page_size=params['per_page'])
     return records[:size],next_state
 

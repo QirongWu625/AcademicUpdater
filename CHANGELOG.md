@@ -1,5 +1,16 @@
 # Changelog / 更新记录
 
+## 1.8.1 — 2026-10-27
+
+- Fix OpenAlex daily semantic requests: use the supported publication-year filter, then enforce the exact date window locally. Resume previously failed sources even when an older run saved its phase as analysis; keep successful sources and finished assessments.
+- Treat daily candidate caps as completed with a coverage notice. Actual source and analysis failures remain resumable.
+- Retain completed streaming output items when the final response omits them, restoring detection of real AI web-search and page-open events.
+- Resolve legacy Oxford/Frontiers journal homepages, verify publisher table columns and metric-year statements, and match uppercase ISSN check digits. Requeue previously failed IF lookups once; manual Refresh retries missing values immediately.
+- When a publisher declines direct HTML access, accept only two agreeing independent AI web reads with actual page-open events, journal/ISSN identity and explicit dated JIF statements. Label these **AI web sources**, separately from directly verified publisher text. Conflicting readings are not saved. Preserve manual corrections.
+- Display recent IF lookup errors in Profile. Existing papers, saved feedback, analyses, searches and credentials are preserved.
+
+修复采集断点续作和 OpenAlex 日期参数；区分采集上限与实际失败。恢复 AI 联网查询识别，改进期刊旧网址、IF 表格与年份核验。区分官网原文核验与 AI 联网查证，自动重试旧的缺失 IF，并保留已有资料。
+
 ## 1.8.0 — 2026-10-27
 
 - Add OpenAlex embedding retrieval and author identity resolution, with editable interpreted strategy, per-work authorship checks, explicit coverage limits and unrestricted author bibliographies when requested.

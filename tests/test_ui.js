@@ -99,3 +99,7 @@ assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'..','static','index.htm
   assert.equal(closed,false);assert.equal(refreshed,false);assert.equal(vm.runInContext('S.boot.settings.ai_concurrency',context),6);
   console.log('UI state regression checks passed (filters, trash, parallel jobs, collection progress, profile data controls).');
 })().catch(error=>{console.error(error);process.exitCode=1});
+
+assert.equal(vm.runInContext("jobStatus({kind:'collect',status:'complete',result:{truncated:['Crossref']}})",context),'completeLimited');
+assert.equal(vm.runInContext("resumable({kind:'collect',status:'complete',result:{truncated:['Crossref']}})",context),false);
+assert.equal(vm.runInContext("resumable({kind:'collect',status:'partial',result:{errors:['OpenAlex failed']}})",context),true);

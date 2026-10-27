@@ -58,6 +58,13 @@ class DiscoveryTests(unittest.TestCase):
         for invalid in ({'mode':'author'},{'mode':'random'},{'semantic_queries':['x']*4},{'orcid':'random'}):
             with self.assertRaises(AppError):normalize_plan(invalid)
 
+    def test_semantic_daily_dates_use_supported_year_filter_then_exact_local_dates(self):
+        rows=[{**work(i),'publication_date':d} for i,d in enumerate(['2026-10-20','2026-10-25','2026-10-27','2026-10-28',None])]
+        with patch('academic_updater.discovery.openalex',return_value={'meta':{'count':5},'results':rows}) as api:
+            records,state=discovery_page('Brain stimulation',{}, {'since':'2026-10-25','until':'2026-10-27'},50)
+        self.assertEqual(api.call_args.args[1]['filter'],'publication_year:2026-2026')
+        self.assertEqual([r['published_at'] for r in records],['2026-10-25','2026-10-27']);self.assertEqual(state['date_filtered'],3)
+
     def test_author_workflow_disables_landmark_and_preserves_identity_evidence(self):
         with tempfile.TemporaryDirectory() as folder:
             store=Store(folder);ai=ControlledAI();service=Service(store,ai)

@@ -70,8 +70,12 @@ class Store:
 
     def _migrate(self,c):
         metric_columns={r['name'] for r in c.execute('PRAGMA table_info(journal_metrics)')}
-        for name,definition in [('origin',"TEXT NOT NULL DEFAULT 'manual'"),('evidence_quote',"TEXT NOT NULL DEFAULT ''")]:
+        for name,definition in [('origin',"TEXT NOT NULL DEFAULT 'manual'"),('evidence_quote',"TEXT NOT NULL DEFAULT ''"),('verification',"TEXT NOT NULL DEFAULT ''")]:
             if name not in metric_columns:c.execute(f'ALTER TABLE journal_metrics ADD COLUMN {name} {definition}')
+        if not c.execute("SELECT 1 FROM kv WHERE key='journal_lookup_v181'").fetchone():
+            c.execute("UPDATE journal_lookups SET status='pending',retry_at=NULL,error='' WHERE status IN ('unavailable','error') AND NOT EXISTS(SELECT 1 FROM journal_metrics m WHERE m.journal_key=journal_lookups.journal_key)")
+            c.execute("DELETE FROM kv WHERE key='journal_lookup_blocked'")
+            c.execute("INSERT INTO kv VALUES('journal_lookup_v181','true')")
         for table in ('items','histories'):
             if 'deleted_at' not in {r['name'] for r in c.execute(f'PRAGMA table_info({table})')}:
                 c.execute(f'ALTER TABLE {table} ADD COLUMN deleted_at TEXT')
@@ -333,6 +337,9 @@ class Store:
     def metric_status(self):
         with self.db() as c:return {r['status']:r['n'] for r in c.execute('SELECT status,COUNT(*) n FROM journal_lookups GROUP BY status')}
 
+    def metric_failures(self):
+        with self.db() as c:return [dict(r) for r in c.execute("SELECT journal,status,error,retry_at FROM journal_lookups WHERE status IN ('error','unavailable') ORDER BY updated_at DESC LIMIT 12")]
+
     def dataset_counts(self):
         with self.db() as c:return {t:c.execute('SELECT COUNT(*) FROM '+t).fetchone()[0] for t in ('items','histories','analyses','journal_metrics')}
 
@@ -355,7 +362,7 @@ class Store:
         validated=[validate_metric(row) for row in rows]
         with self.db() as c:
             for m,original in zip(validated,rows):
-                c.execute('INSERT INTO journal_metrics(journal,journal_key,issns,year,impact_factor,source,source_url,updated_at,origin,evidence_quote) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(journal_key,year) DO UPDATE SET journal=excluded.journal,issns=excluded.issns,impact_factor=excluded.impact_factor,source=excluded.source,source_url=excluded.source_url,updated_at=excluded.updated_at,origin=excluded.origin,evidence_quote=excluded.evidence_quote WHERE ?=0 OR journal_metrics.origin=\'automatic\'',(m['journal'],m['journal_key'],encode(m['issns']),m['year'],m['impact_factor'],m['source'],m['source_url'],now(),'automatic' if automatic else 'manual',str(original.get('evidence_quote',''))[:1600] if automatic else '',int(automatic)))
+                c.execute('INSERT INTO journal_metrics(journal,journal_key,issns,year,impact_factor,source,source_url,updated_at,origin,evidence_quote,verification) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(journal_key,year) DO UPDATE SET journal=excluded.journal,issns=excluded.issns,impact_factor=excluded.impact_factor,source=excluded.source,source_url=excluded.source_url,updated_at=excluded.updated_at,origin=excluded.origin,evidence_quote=excluded.evidence_quote,verification=excluded.verification WHERE ?=0 OR journal_metrics.origin=\'automatic\'',(m['journal'],m['journal_key'],encode(m['issns']),m['year'],m['impact_factor'],m['source'],m['source_url'],now(),'automatic' if automatic else 'manual',str(original.get('evidence_quote',''))[:1600] if automatic else '',str(original.get('verification','publisher_text')) if automatic else '',int(automatic)))
         return len(validated)
 
     def pending_items(self,profile_version):

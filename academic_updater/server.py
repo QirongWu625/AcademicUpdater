@@ -35,7 +35,7 @@ class Application:
         return {'app':'AcademicUpdater','version':__version__,'csrf':self.csrf,'settings':self.store.settings(),'profile':self.store.get('profile'),'sources':[s for s in self.store.sources() if s['kind']!='scispace_import'],'stats':self.store.stats(),'auth':self.auth_status(),'capabilities':self.ai.capabilities(),'histories':self.service.history.list(),
                 'jobs':jobs,'execution':self.service.ai_limiter.state(),'startup':startup.status(),
                 'scheduler':self.store.get('scheduler_status',{}),'scheduled_day':self.store.get('scheduled_day'),'local_day':self.service.local_day(),
-                'journal_metrics_status':self.store.metric_status(),'journal_lookup_blocked':self.store.get('journal_lookup_blocked',{}),
+                'journal_metrics_status':self.store.metric_status(),'journal_lookup_blocked':self.store.get('journal_lookup_blocked',{}),'journal_metric_failures':self.store.metric_failures(),
                 'saved_learning':{'pending':learning['changed'],'count':learning['count']} if learning else None}
 
     def auth_status(self):
@@ -152,7 +152,9 @@ def make_server(app,port):
                     origin='ai' if current['origin']=='ai' and current['understanding']==u and current['understanding_revision']==body.get('revision') else 'manual'
                     return self.json(app.store.apply_profile(body.get('revision'),u,origin))
                 if path=='/api/dataset/clear':return self.json(app.service.clear_dataset(body.get('confirmation')))
-                if path=='/api/metrics/refresh':return self.json({'job_id':app.service.start_job('journal_metrics')})
+                if path=='/api/metrics/refresh':
+                    app.service.journals.retry_missing()
+                    return self.json({'job_id':app.service.start_job('journal_metrics')})
                 if path=='/api/settings':return self.json(app.service.save_settings(body))
                 if path=='/api/startup':return self.json(startup.configure(bool(body.get('enabled'))))
                 if path=='/api/settings/key':
