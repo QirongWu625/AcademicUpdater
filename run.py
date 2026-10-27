@@ -39,7 +39,6 @@ def main():
     server=make_server(app,args.port)
     (directory/'server.json').write_text(json.dumps({'pid':os.getpid(),'port':app.port}),encoding='utf-8')
     if not args.no_scheduler:
-        app.service.recover_interrupted()
         threading.Thread(target=app.service.scheduler,daemon=True).start()
     url=f'http://127.0.0.1:{app.port}'
     print(url,flush=True)

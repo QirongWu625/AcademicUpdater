@@ -139,6 +139,8 @@ class AI:
             self.store.finish_ai(usage,'completed');return result
         except AppError:
             self.store.finish_ai(usage,'failed');raise
+        except (TimeoutError,OSError) as exc:
+            self.store.finish_ai(usage,'failed');raise AppError('ai_stream_interrupted','The AI connection ended before completion.',502) from exc
         except (ValueError,KeyError,TypeError,IndexError) as exc:
             self.store.finish_ai(usage,'invalid_output');raise AppError('invalid_ai_output',status=502) from exc
 

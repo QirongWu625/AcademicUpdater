@@ -10,6 +10,7 @@ from .network import AppError,get_json
 from .sources import crossref_record,arxiv_records,arxiv_request
 from .storage import encode,now
 from .search_queries import arxiv_query,crossref_queries,history_streams,upgrade_history_streams
+from .execution import transient
 
 ROLE={'type':'string','enum':['foundation','method','application','review','other','uncertain']}
 RANK={'type':'string','enum':['high','medium','low','uncertain']}
@@ -201,10 +202,10 @@ class History:
                 progress.setdefault('previous_query_streams',[]).extend(archived)
                 progress['query_adapter_updated']=True
         self.update(hid,status='searching',progress=progress,error='')
-        checkpoint=self.service._checkpoint;pause=self.service._check_pause
+        checkpoint=self.service._checkpoint;pause=lambda:self.service._check_pause(job)
         checkpoint(job,history_id=hid,phase='history_searching',model=settings['model'],reasoning_effort=settings.get('reasoning_effort','default'))
         sources={s['kind']:s['id'] for s in self.store.sources() if s['kind'] in ('crossref','arxiv')}
-        errors=[]
+        errors=[];source_retry=False
         for stream in progress['streams']:
             if stream.get('done'):continue
             stream.pop('error',None);stream.pop('error_detail',None);cursor_retries=0
@@ -244,19 +245,25 @@ class History:
                     # Expired Crossref cursors can be replayed safely: identifiers and associations deduplicate.
                     if stream['source']=='crossref' and stream.get('cursor')!='*' and any(x in exc.detail for x in ('HTTP 400','HTTP 404','HTTP 410')) and cursor_retries<1:
                         cursor_retries+=1;stream.update(cursor='*',position=0,restarted=True);self.update(hid,progress=progress);continue
-                    stream['error']=exc.code;stream['error_detail']=exc.detail;errors.append(stream['source']+': '+exc.code);self.update(hid,progress=progress);break
+                    stream['error']=exc.code;stream['error_detail']=exc.detail;errors.append(stream['source']+': '+exc.code);source_retry=source_retry or transient(exc);self.update(hid,progress=progress);break
+        checkpoint(job,source_retry=source_retry)
         if h['config']['analyze']:
             self.update(hid,status='analyzing');checkpoint(job,phase='history_analyzing',current_title='')
-            while True:
-                pause()
-                with self.store.db() as c:batch=[json.loads(r['snapshot']) for r in c.execute("SELECT x.snapshot FROM history_items x JOIN items i ON i.id=x.item_id WHERE history_id=? AND x.status='pending' AND i.deleted_at IS NULL ORDER BY item_id LIMIT 10",(hid,))]
-                if not batch:break
-                self.analyze_batch(hid,{**h['scope'],'original_prompt':h['prompt']},batch,settings)
+            def batches():
+                last=0
+                while True:
+                    pause()
+                    with self.store.db() as c:batch=[json.loads(r['snapshot']) for r in c.execute("SELECT x.snapshot FROM history_items x JOIN items i ON i.id=x.item_id WHERE history_id=? AND x.status='pending' AND i.deleted_at IS NULL AND x.item_id>? ORDER BY x.item_id LIMIT 10",(hid,last))]
+                    if not batch:return
+                    last=batch[-1]['id'];yield batch
+            def assess(batch):
+                self.service.ai_call(job,lambda:self.analyze_batch(hid,{**h['scope'],'original_prompt':h['prompt']},batch,settings))
                 counts=self.get(hid,False)['counts'];checkpoint(job,history_analyzed=counts.get('completed',0),history_collected=counts['total'])
+            self.service.parallel_work(job,batches(),assess)
             h=self.get(hid)
             if h['items'] and not h['report']:
                 pause();self.update(hid,status='summarizing');checkpoint(job,phase='history_summarizing')
-                self.synthesize(h,settings)
+                self.service.ai_call(job,lambda:self.synthesize(h,settings))
         errors.extend(progress.get('record_errors',[]))
         limited=[x['source']+' · '+x['query'] for x in progress['streams'] if x.get('capped') or x.get('source_limited')]
         return {'history_id':hid,'papers':self.get(hid,False)['counts']['total'],'errors':errors,'truncated':limited}

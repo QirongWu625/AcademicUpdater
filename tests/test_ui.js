@@ -14,7 +14,7 @@ const context=vm.createContext({
   document:{addEventListener(){}},$:(selector)=>controls[selector],
   setTimeout,clearTimeout,structuredClone
 });
-for(const name of ['history.js','trash.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'..','static',name),'utf8'),context);
+for(const name of ['history.js','trash.js','execution.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'..','static',name),'utf8'),context);
 vm.runInContext("const t=k=>COPY[k]?.[0]||k,esc=v=>String(v??''),btn=(a,l)=>'<button>'+t(l)+'</button>';",context);
 (async()=>{
   // A periodic refresh may supersede the click's list request. Controls must
@@ -36,5 +36,19 @@ vm.runInContext("const t=k=>COPY[k]?.[0]||k,esc=v=>String(v??''),btn=(a,l)=>'<bu
   const pending=vm.runInContext("T.kind='items';T.query='';loadTrash()",context);
   vm.runInContext("T.kind='histories';T.request++;",context);finish([{id:1}]);
   assert.equal(await pending,false);assert.equal(vm.runInContext('T.rows.length',context),0);
+  vm.runInContext(`
+    const displayDate=x=>x||'',errorText=x=>x,lang=()=> 'en';
+    S.boot={settings:{auto_resume:true},execution:{active:3,limit:3},jobs:[
+      {id:1,kind:'collect',status:'running',argument:{input:null},progress:{phase:'analysis'},queue:{total:9,completed:3}},
+      {id:2,kind:'history_search',status:'running',argument:{input:7},progress:{history_collected:100,history_analyzed:20}},
+      {id:3,kind:'analyze',status:'paused',argument:{},progress:{pause_requested:true},error:'paused_by_user'}
+    ]};
+  `,context);
+  assert.equal(vm.runInContext('runningJobs().length',context),2);
+  assert.equal(vm.runInContext('historyBusy(7)',context),true);
+  assert.equal(vm.runInContext('historyBusy(8)',context),false);
+  html=vm.runInContext('jobBanner()',context);
+  assert.match(html,/collectJob #1/);assert.match(html,/historyPage #2/);assert.match(html,/analyzeJob #3/);
+  assert.match(html,/3 \/ 3/);assert.equal((html.match(/pauseJob/g)||[]).length,2);
   console.log('UI state regression checks passed (filters, empty states, trash navigation).');
 })().catch(error=>{console.error(error);process.exitCode=1});

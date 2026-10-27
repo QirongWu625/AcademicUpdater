@@ -1,5 +1,15 @@
 # Changelog / 更新记录
 
+## 1.6.0 — 2026-10-27
+
+- Run daily collection, independent historical searches and paper analysis concurrently. Share a fair AI request limit (default 3, adjustable 1–8); checkpoint each completed paper or history batch. Prevent duplicate work on the same paper/version/scope/model.
+- Recover all eligible interrupted tasks, retry temporary connection errors with backoff, resume daily-budget pauses after local midnight, and retain manual pauses. Show interruption causes, retry times and recovery events per task. Network recovery stops after five automatic job retries; configuration and sign-in errors require attention.
+- Catch up missed daily collection on startup, keep the scheduler alive after unexpected errors, and allow the next day's update while an older analysis is still running. Add optional Windows login startup in Personal profile → Sources & schedule.
+- Before a new collection, recompute the understood research field when the current saved-paper set changes. Preserve the original prompt, exclusions, unapplied drafts and historical-search scopes. Removing all saved papers restores the baseline; unchanged sets make no learning request. Large saved sets use an explicitly reported sample of up to 80 papers.
+- Preserve existing data, model/effort settings and resumable checkpoints. Add parallelism, recovery, budget, scheduling and saved-feedback regression tests plus bilingual multi-job controls.
+
+支持跨任务并行、共享 AI 并发上限、自动补跑、断点恢复与退避重试；新增 Windows 登录自启设置。收藏增减后在采集前更新领域理解，保留原始提示词与排除条件；手动暂停、旧论文及既有分析继续保留。
+
 ## 1.5.0 — 2026-10-26
 
 - Separate Trash navigation with live search and Library records / Historical searches tabs; preserve the old history-trash link.

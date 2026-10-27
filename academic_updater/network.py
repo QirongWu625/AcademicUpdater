@@ -73,7 +73,10 @@ def request(url, *, data=None, headers=None, local=False, timeout=35, limit=8_00
                 time.sleep(2 ** attempt)
                 continue
             # Never include upstream request bodies, query tokens, or raw error pages.
-            raise AppError('upstream_http_error', f'{urllib.parse.urlsplit(url).hostname}: HTTP {exc.code}', 502) from exc
+            error=AppError('upstream_http_error', f'{urllib.parse.urlsplit(url).hostname}: HTTP {exc.code}', 502)
+            try:error.retry_after=min(300,max(0,int(exc.headers.get('Retry-After','0'))))
+            except (TypeError,ValueError):error.retry_after=0
+            raise error from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise AppError('network_error', f'Could not connect to {urllib.parse.urlsplit(url).hostname}.', 502) from exc
 

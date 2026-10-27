@@ -2,11 +2,15 @@ from __future__ import annotations
 import datetime as dt
 import json
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor,wait,FIRST_COMPLETED
 from .network import AppError,validate_url
 from .sources import collect,import_link
 from .storage import encode,now
 from .ai import EFFORTS
 from .history import History,HISTORY_KINDS
+from .execution import AILimiter,BLOCKED,transient
+from .ai import PROFILE_SCHEMA,validate_scope
 
 class JobPaused(Exception):
     def __init__(self,code='paused_by_user'):self.code=code
@@ -14,70 +18,163 @@ class JobPaused(Exception):
 class Service:
     def __init__(self,store,ai):
         self.store,self.ai=store,ai
-        self.lock=threading.Lock();self.stop=threading.Event();self.cancel=threading.Event();self.current_job=None
+        # lock is an activity barrier for deletion; independent workers share it.
+        self.lock=threading.Lock();self.guard=threading.RLock();self.stop=threading.Event();self.workers={}
+        self.digest_lock=threading.Lock();self.profile_lock=threading.Lock();self.item_locks={}
+        self.ai_limiter=AILimiter(lambda:self.store.settings()['ai_concurrency'])
         self.history=History(self)
 
+    def group(self,kind,argument):
+        if kind=='collect':return (kind,(argument or {}).get('day'))
+        return ('history',argument) if kind in HISTORY_KINDS else (kind,argument if kind=='item_analysis' else None)
+
+    def _claim(self,kind,argument):
+        group=self.group(kind,argument)
+        if any(w['group']==group for w in self.workers.values()):raise AppError('job_already_running',status=409)
+        if len(self.workers)>=8:raise AppError('too_many_jobs',status=409)
+        if not self.workers and not self.lock.acquire(False):raise AppError('job_already_running',status=409)
+        return group
+
     def start_job(self,kind,argument=None):
+        if kind=='collect' and argument is None:
+            argument={'day':(dt.datetime.now(dt.timezone.utc)+dt.timedelta(hours=self.store.settings()['utc_offset'])).date().isoformat()}
         if kind in HISTORY_KINDS:
             h=self.history.get(argument,False)
             if kind=='history_plan' and h['progress'].get('search_started'):raise AppError('history_locked')
             if kind=='history_search' and (not h['scope'].get('queries') or not (h['scope'].get('field_en') or h['scope'].get('field_zh'))):raise AppError('history_scope_required')
-        if not self.lock.acquire(False):raise AppError('job_already_running',status=409)
-        try:
-            if kind in HISTORY_KINDS:self.history.get(argument,False)
-            if kind=='item_analysis':self.store.item(argument)
-            payload={'input':argument,'profile':self.store.get('profile')['active'],'settings':self.store.settings()}
-            with self.store.db() as c:job=c.execute("INSERT INTO runs(kind,status,started_at,argument) VALUES(?,'running',?,?)",(kind,now(),encode(payload))).lastrowid
-            self._launch(job);return job
-        except Exception:self.lock.release();raise
+        with self.guard:
+            group=self._claim(kind,argument)
+            try:
+                if kind in HISTORY_KINDS:self.history.get(argument,False)
+                if kind=='item_analysis':self.store.item(argument)
+                payload={'input':argument,'profile':self.store.get('profile')['active'],'settings':self.store.settings()}
+                with self.store.db() as c:job=c.execute("INSERT INTO runs(kind,status,started_at,argument) VALUES(?,'running',?,?)",(kind,now(),encode(payload))).lastrowid
+                self.workers[job]={'group':group,'cancel':threading.Event()};self._launch(job);return job
+            except Exception:
+                if not self.workers:self.lock.release()
+                raise
 
     def _launch(self,job):
-        self.cancel.clear();self.current_job=job
-        threading.Thread(target=self._run,args=(job,),daemon=True).start()
+        thread=threading.Thread(target=self._run,args=(job,),daemon=True)
+        self.workers[job]['thread']=thread;thread.start()
 
-    def resume(self,job):
+    def resume(self,job,automatic=False):
         row=self.store.job(job)
-        if row['kind'] not in ('collect','analyze',*HISTORY_KINDS) or row['status'] not in ('interrupted','paused','partial','failed'):raise AppError('job_not_resumable')
-        if not self.lock.acquire(False):raise AppError('job_already_running',status=409)
-        try:
+        if row['kind'] not in ('collect','analyze','item_analysis','interpret',*HISTORY_KINDS) or row['status'] not in ('interrupted','paused','partial','failed'):raise AppError('job_not_resumable')
+        with self.guard:
             argument=row['argument'];progress=row['progress']
-            if row['kind'] in HISTORY_KINDS:self.history.get(argument.get('input'),False)
-            if not argument:
-                argument={'input':None,'profile':self.store.get('profile')['active'],'settings':self.store.settings()}
-                # Old versions checkpointed each successful analysis but had no task table.
-                with self.store.db() as c:had_analysis=c.execute('SELECT 1 FROM analyses WHERE created_at>=? LIMIT 1',(row['started_at'],)).fetchone()
-                progress['phase']='analysis' if had_analysis or row['kind']=='analyze' else 'collection'
-            progress.pop('pause_requested',None)
-            with self.store.db() as c:
-                c.execute("UPDATE runs SET status='running',finished_at=NULL,error=NULL,argument=?,progress=? WHERE id=?",(encode(argument),encode(progress),job))
-                c.execute("UPDATE analysis_tasks SET status='pending',error=NULL WHERE run_id=? AND status IN ('running','failed')",(job,))
-            self._launch(job);return job
-        except Exception:self.lock.release();raise
+            if row['kind']=='collect' and argument and argument.get('input') is None:
+                argument['input']={'day':(dt.datetime.fromisoformat(row['started_at'].replace('Z','+00:00'))+dt.timedelta(hours=self.store.settings()['utc_offset'])).date().isoformat()}
+            group=self._claim(row['kind'],argument.get('input'))
+            try:
+                if row['kind'] in HISTORY_KINDS:self.history.get(argument.get('input'),False)
+                if not argument:
+                    argument={'input':None,'profile':self.store.get('profile')['active'],'settings':self.store.settings()}
+                    with self.store.db() as c:had_analysis=c.execute('SELECT 1 FROM analyses WHERE created_at>=? LIMIT 1',(row['started_at'],)).fetchone()
+                    progress['phase']='analysis' if had_analysis or row['kind']=='analyze' else 'collection'
+                progress.pop('pause_requested',None);progress.pop('retry_at',None)
+                progress['auto_retries']=(progress.get('auto_retries',0)+int(progress.get('retry_reason')!='daily_ai_limit')) if automatic else 0
+                if row['kind']=='collect' and progress.get('collection_retry'):progress['phase']='collection'
+                with self.store.db() as c:
+                    c.execute("UPDATE runs SET status='running',finished_at=NULL,error=NULL,argument=?,progress=? WHERE id=?",(encode(argument),encode(progress),job))
+                    c.execute("UPDATE analysis_tasks SET status='pending',error=NULL WHERE run_id=? AND status IN ('running','failed')",(job,))
+                self.store.run_event(job,'resumed',row.get('error') or row['status'])
+                self.workers[job]={'group':group,'cancel':threading.Event()};self._launch(job);return job
+            except Exception:
+                if not self.workers:self.lock.release()
+                raise
 
     def pause(self,job):
-        if self.current_job!=job:raise AppError('job_not_running')
-        self.cancel.set();self._checkpoint(job,pause_requested=True)
+        with self.guard:
+            if job not in self.workers:raise AppError('job_not_running')
+            self.workers[job]['cancel'].set();self._checkpoint(job,pause_requested=True)
+            self.store.run_event(job,'pause_requested','paused_by_user')
 
     def recover_interrupted(self):
-        with self.store.db() as c:row=c.execute("SELECT id,progress FROM runs WHERE kind IN ('collect','analyze','history_plan','history_search') AND status='interrupted' AND (kind IN ('collect','analyze') OR EXISTS(SELECT 1 FROM histories h WHERE h.id=json_extract(runs.argument,'$.input') AND h.deleted_at IS NULL)) ORDER BY id DESC LIMIT 1").fetchone()
-        if row:
+        if not self.store.settings()['auto_resume']:return
+        with self.store.db() as c:rows=c.execute("SELECT id,progress FROM runs WHERE kind IN ('collect','analyze','item_analysis','interpret','history_plan','history_search') AND status='interrupted' AND (kind NOT IN ('history_plan','history_search') OR EXISTS(SELECT 1 FROM histories h WHERE h.id=json_extract(runs.argument,'$.input') AND h.deleted_at IS NULL)) ORDER BY CASE kind WHEN 'collect' THEN 0 ELSE 1 END,id").fetchall()
+        for row in rows:
             if json.loads(row['progress']).get('pause_requested'):
                 with self.store.db() as c:c.execute("UPDATE runs SET status='paused',error='paused_by_user' WHERE id=?",(row['id'],))
-            else:self.resume(row['id'])
+            else:
+                try:self.resume(row['id'])
+                except AppError as exc:
+                    if exc.code not in ('job_already_running','too_many_jobs','not_found'):raise
 
     def set_deleted(self,kind,record_id,deleted):
         # Serialize with workers, including scheduled collection and resumed analysis.
-        if not self.lock.acquire(False):raise AppError('pause_before_delete',status=409)
-        try:return self.store.set_deleted(kind,record_id,deleted)
-        finally:self.lock.release()
+        with self.guard:
+            if not self.lock.acquire(False):raise AppError('pause_before_delete',status=409)
+            try:return self.store.set_deleted(kind,record_id,deleted)
+            finally:self.lock.release()
 
     def _checkpoint(self,job,**changes):
         with self.store.db() as c:
             c.execute('BEGIN IMMEDIATE');old=json.loads(c.execute('SELECT progress FROM runs WHERE id=?',(job,)).fetchone()[0]);old.update(changes)
             c.execute('UPDATE runs SET progress=? WHERE id=?',(encode(old),job))
 
-    def _check_pause(self):
-        if self.cancel.is_set() or self.stop.is_set():raise JobPaused()
+    def _check_pause(self,job):
+        worker=self.workers.get(job)
+        if worker and worker['cancel'].is_set():raise JobPaused()
+        if self.stop.is_set():raise JobPaused('application_stopped')
+
+    def _wait_retry(self,job,seconds):
+        until=time.monotonic()+seconds
+        while time.monotonic()<until:
+            self._check_pause(job);self.stop.wait(min(.2,until-time.monotonic()))
+
+    def ai_call(self,job,call):
+        for attempt in range(3):
+            self._check_pause(job)
+            try:
+                with self.ai_limiter.slot(job,lambda:self._check_pause(job)):return call()
+            except AppError as exc:
+                if not transient(exc) or attempt==2:raise
+                delay=max(2**(attempt+1),getattr(exc,'retry_after',0))
+                if 'HTTP 429' in exc.detail:self.ai_limiter.cool_down(delay)
+                self.store.run_event(job,'retry',exc.code+': '+exc.detail)
+                self._checkpoint(job,last_retry_error=exc.code,next_attempt_at=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(seconds=delay)).isoformat())
+                self._wait_retry(job,delay)
+            finally:
+                self._checkpoint(job,next_attempt_at=None)
+
+    def parallel_work(self,job,entries,work):
+        entries=iter(entries);pending=set();failure=None
+        with ThreadPoolExecutor(max_workers=8,thread_name_prefix='assessment') as pool:
+            exhausted=False
+            while pending or not exhausted:
+                try:
+                    self._check_pause(job)
+                    while not exhausted and len(pending)<self.store.settings()['ai_concurrency']:
+                        self._check_pause(job)
+                        try:entry=next(entries)
+                        except StopIteration:exhausted=True;break
+                        pending.add(pool.submit(work,entry))
+                except Exception as exc:failure=exc;exhausted=True
+                if not pending:break
+                done,pending=wait(pending,timeout=.2,return_when=FIRST_COMPLETED)
+                for future in done:
+                    try:future.result()
+                    except Exception as exc:
+                        if failure is None:failure=exc
+                        exhausted=True
+                if failure:
+                    for future in pending:future.cancel()
+                    # Running requests finish and checkpoint; no new work is submitted.
+                    for future in pending:
+                        if not future.cancelled():
+                            try:future.result()
+                            except Exception:pass
+                    break
+        if failure:raise failure
+
+    def analyze_item(self,job,item_id,profile,settings,expected_version=None):
+        if not profile:raise AppError('research_not_applied')
+        key=(item_id,expected_version,profile['version'],settings['provider'],settings['model'],settings.get('reasoning_effort','default'))
+        with self.guard:lock=self.item_locks.setdefault(key,threading.Lock())
+        while not lock.acquire(timeout=.2):self._check_pause(job)
+        try:return self.ai_call(job,lambda:self.ai.analyze(item_id,profile=profile,settings=settings,expected_version=expected_version))
+        finally:lock.release()
 
     def _run(self,job):
         row=self.store.job(job);kind=row['kind'];payload=row['argument'];result={}
@@ -87,21 +184,25 @@ class Service:
                 result=self.store.job(job)['progress'].get('collection',{})
                 result['analysis']=self._analyze_queue(job,payload)
             elif kind=='analyze':result=self._analyze_queue(job,payload)
-            elif kind=='history_plan':result=self.history.plan(payload['input'],payload['settings'])
+            elif kind=='history_plan':result=self.ai_call(job,lambda:self.history.plan(payload['input'],payload['settings']))
             elif kind=='history_search':result=self.history.search(payload['input'],payload['settings'],job)
-            elif kind=='interpret':result={'profile':self.ai.interpret(payload['input'])}
-            elif kind=='item_analysis':result={'analysis':self.ai.analyze(payload['input'],profile=payload['profile'],settings=payload['settings'])}
+            elif kind=='interpret':result={'profile':self.ai_call(job,lambda:self.ai.interpret(payload['input']))}
+            elif kind=='item_analysis':result={'analysis':self.analyze_item(job,payload['input'],payload['profile'],payload['settings'],self.store.item(payload['input'])['current_version'])}
             elif kind=='import':
                 result=self.store.ingest(0,import_link(payload['input']['value'],payload['input'].get('kind','paper')))
                 if result.get('deleted'):raise AppError('item_in_trash')
             else:raise AppError('invalid_job')
             partial=result.get('errors') or result.get('truncated') or result.get('analysis',{}).get('errors')
             with self.store.db() as c:c.execute('UPDATE runs SET status=?,finished_at=?,result=?,error=NULL WHERE id=?',('partial' if partial else 'complete',now(),encode(result),job))
+            if self.store.job(job)['progress'].get('source_retry') or self.store.job(job)['progress'].get('collection_retry'):
+                self._arrange_retry(job,AppError('network_error','Some sources are temporarily unavailable.'))
         except JobPaused as exc:
-            with self.store.db() as c:c.execute("UPDATE runs SET status='paused',finished_at=?,error=? WHERE id=?",(now(),exc.code,job))
+            with self.store.db() as c:c.execute("UPDATE runs SET status=?,finished_at=?,error=? WHERE id=?",('interrupted' if exc.code=='application_stopped' else 'paused',now(),exc.code,job))
+            self._arrange_retry(job,exc)
         except Exception as exc:
             detail=(exc.code+': '+exc.detail) if isinstance(exc,AppError) else type(exc).__name__
-            with self.store.db() as c:c.execute("UPDATE runs SET status=?,finished_at=?,error=? WHERE id=?",('paused' if kind in HISTORY_KINDS and isinstance(exc,AppError) and exc.code in ('daily_ai_limit','ai_not_connected','model_not_selected','subscription_not_authorized','sign_in_again','reasoning_not_supported') else 'failed',now(),detail,job))
+            with self.store.db() as c:c.execute("UPDATE runs SET status=?,finished_at=?,error=? WHERE id=?",('paused' if isinstance(exc,AppError) and exc.code in BLOCKED else 'failed',now(),detail,job))
+            self._arrange_retry(job,exc)
         finally:
             try:
                 if kind in HISTORY_KINDS:
@@ -111,21 +212,68 @@ class Service:
                 if kind in ('collect','analyze','item_analysis'):
                     try:self.digest()
                     except Exception:pass
-            finally:self.current_job=None;self.lock.release()
+            finally:
+                with self.guard:
+                    self.workers.pop(job,None)
+                    if not self.workers:self.lock.release()
+
+    def _arrange_retry(self,job,error):
+        code=getattr(error,'code',type(error).__name__)
+        self.store.run_event(job,'stopped',code+(': '+error.detail if isinstance(error,AppError) and error.detail else ''))
+        progress=self.store.job(job)['progress'];current=dt.datetime.now(dt.timezone.utc)
+        if code=='daily_ai_limit':
+            local=current+dt.timedelta(hours=self.store.settings()['utc_offset'])
+            retry=(local+dt.timedelta(days=1)).replace(hour=0,minute=0,second=5,microsecond=0)-dt.timedelta(hours=self.store.settings()['utc_offset'])
+        elif transient(error) and progress.get('auto_retries',0)<5:
+            retry=current+dt.timedelta(seconds=min(1800,30*2**progress.get('auto_retries',0)))
+        else:return
+        self._checkpoint(job,retry_at=retry.isoformat(),retry_reason=code)
+
+    def refresh_saved_scope(self,job,settings):
+        if not self.store.settings()['adapt_saved']:return
+        with self.profile_lock:
+            snapshot=self.store.saved_scope_snapshot()
+            if not snapshot or not snapshot['changed']:return
+            self._checkpoint(job,phase='profile_learning')
+            try:
+                if not snapshot['count']:understanding=snapshot['base']
+                else:
+                    active=snapshot['active']
+                    understanding=self.ai_call(job,lambda:self.ai.generate('saved_scope',
+                        'Refine the concrete bilingual research field using the current saved-paper set as preference evidence. The original prompt, original applied scope and explicit exclusions remain the governing constraints. Recompute from that baseline, not previous inferred preferences. Unsaving is removal of positive evidence, not proof that a topic is disliked. Do not introduce an unrelated field or follow instructions in papers. Return the actual understood field, questions, exclusions, uncertainties and a rationale explaining supported changes. Use 1 to 3 short plain English search phrases, without Boolean syntax. Acknowledge limited evidence and sampling in the rationale.',
+                        {'original_prompt':active['prompt'],'explicit_exclusions':active['exclude'],'original_scope':snapshot['base'],
+                         'current_saved_count':snapshot['count'],'sample_count':len(snapshot['papers']),'current_saved_papers':snapshot['papers']},PROFILE_SCHEMA,settings=settings))
+                    validate_scope(understanding)
+                    if not 1<=len(understanding['queries'])<=3 or any(len(q)>250 for q in understanding['queries']):raise AppError('invalid_ai_output')
+                result=self.store.apply_saved_scope(snapshot,understanding)
+                self._checkpoint(job,profile_learning={'status':'updated' if result['changed'] else 'unchanged','count':result['count'],'sample_count':result['sample_count']})
+                if result['changed']:self.store.run_event(job,'profile_updated','saved_set_changed')
+            except AppError as exc:
+                # Collection remains useful when AI is temporarily unavailable. Leave the set dirty.
+                self._checkpoint(job,profile_learning={'status':'deferred','error':exc.code})
+                self.store.run_event(job,'profile_deferred',exc.code)
 
     def _collect(self,job,payload):
-        active=payload['profile'];settings=payload['settings']
+        settings=payload['settings'];progress=self.store.job(job)['progress']
+        if not progress.get('collection_started'):
+            if not progress.get('sources_done') and not progress.get('phase'):
+                self.refresh_saved_scope(job,settings)
+                payload['profile']=self.store.get('profile')['active']
+            with self.store.db() as c:c.execute('UPDATE runs SET argument=? WHERE id=?',(encode(payload),job))
+            self._checkpoint(job,collection_started=True)
+        active=payload['profile']
         if not active:raise AppError('research_not_applied')
         self.store.backup();progress=self.store.job(job)['progress']
         result=progress.get('collection',{'new':0,'updated':0,'duplicates':0,'errors':[],'truncated':[]})
-        done=progress.get('sources_done',[])
+        done=progress.get('sources_done',[]);source_errors=progress.get('source_errors',{});retry_sources=[]
         for source in self.store.sources():
             if not source['enabled'] or source['id'] in done:continue
-            self._check_pause();self._checkpoint(job,phase='collection',source=source['name'],collection=result,sources_done=done)
+            self._check_pause(job);self._checkpoint(job,phase='collection',source=source['name'],collection=result,sources_done=done)
             try:
+                source_errors.pop(str(source['id']),None)
                 records,truncated=collect(source,active,settings)
                 for record in records:
-                    self._check_pause()
+                    self._check_pause(job)
                     try:
                         info=self.store.ingest(source['id'],record)
                         result['new']+=int(info['new']);result['updated']+=int(info['updated']);result['duplicates']+=int(info['duplicate'])
@@ -134,8 +282,11 @@ class Service:
                     result['truncated'].append(source['name']);self.store.source_status(source['id'],'limited','Collection limit reached.')
                 else:self.store.source_status(source['id'],'ok')
             except AppError as exc:
-                detail=exc.code+': '+exc.detail;result['errors'].append(source['name']+': '+detail);self.store.source_status(source['id'],'error',detail)
-            done.append(source['id']);self._checkpoint(job,collection=result,sources_done=done)
+                detail=exc.code+': '+exc.detail;source_errors[str(source['id'])]=source['name']+': '+detail;self.store.source_status(source['id'],'error',detail)
+                if transient(exc):retry_sources.append(source['id'])
+            if source['id'] not in retry_sources:done.append(source['id'])
+            result['errors']=list(source_errors.values())
+            self._checkpoint(job,collection=result,sources_done=done,source_errors=source_errors,collection_retry=bool(retry_sources))
         self._checkpoint(job,phase='analysis')
 
     def _analyze_queue(self,job,payload):
@@ -144,38 +295,45 @@ class Service:
         self._checkpoint(job,phase='analysis',model=settings['model'],reasoning_effort=settings.get('reasoning_effort','default'),profile_version=active['version'])
         for item in self.store.pending_items(active['version']):
             with self.store.db() as c:c.execute("INSERT OR IGNORE INTO analysis_tasks(run_id,item_id,version_id,profile_version,updated_at) VALUES(?,?,?,?,?)",(job,item['id'],item['current_version'],active['version'],now()))
-        errors=[];consecutive=0
-        while True:
-            self._check_pause()
-            with self.store.db() as c:
-                task=c.execute("SELECT * FROM analysis_tasks WHERE run_id=? AND status='pending' ORDER BY id LIMIT 1",(job,)).fetchone()
-            if not task:break
+        errors=[];error_lock=threading.Lock();error_state={'consecutive':0}
+        with self.store.db() as c:tasks=[dict(r) for r in c.execute("SELECT * FROM analysis_tasks WHERE run_id=? AND status='pending' ORDER BY id",(job,))]
+        def assess(task):
+            self._check_pause(job)
             item=self.store.item(task['item_id'],include_deleted=True)
             if item['deleted_at']:
                 with self.store.db() as c:c.execute("UPDATE analysis_tasks SET status='skipped',error='item_in_trash',updated_at=? WHERE id=?",(now(),task['id']))
-                continue
+                return
             with self.store.db() as c:
                 already=c.execute('SELECT 1 FROM analyses WHERE item_id=? AND version_id=? AND profile_version=?',(task['item_id'],task['version_id'],task['profile_version'])).fetchone()
                 if already or item['ignored']:
-                    c.execute('UPDATE analysis_tasks SET status=?,updated_at=? WHERE id=?',('completed' if already else 'skipped',now(),task['id']));continue
+                    c.execute('UPDATE analysis_tasks SET status=?,updated_at=? WHERE id=?',('completed' if already else 'skipped',now(),task['id']));return
                 c.execute("UPDATE analysis_tasks SET status='running',attempts=attempts+1,updated_at=? WHERE id=?",(now(),task['id']))
             self._checkpoint(job,current_item=task['item_id'],current_title=item['title'][:240])
             try:
-                self.ai.analyze(task['item_id'],profile=active,settings=settings,expected_version=task['version_id'])
+                self.analyze_item(job,task['item_id'],active,settings,task['version_id'])
                 with self.store.db() as c:c.execute("UPDATE analysis_tasks SET status='completed',error=NULL,updated_at=? WHERE id=?",(now(),task['id']))
-                consecutive=0;self.digest()
+                with error_lock:error_state['consecutive']=0
+                self.digest()
+            except JobPaused:
+                with self.store.db() as c:c.execute("UPDATE analysis_tasks SET status='pending',updated_at=? WHERE id=?",(now(),task['id']))
+                raise
             except AppError as exc:
-                blocked=exc.code in ('daily_ai_limit','ai_not_connected','model_not_selected','subscription_not_authorized','sign_in_again','reasoning_not_supported')
+                blocked=exc.code in BLOCKED
                 status='pending' if blocked else 'skipped' if exc.code=='source_version_changed' else 'failed'
                 with self.store.db() as c:c.execute('UPDATE analysis_tasks SET status=?,error=?,updated_at=? WHERE id=?',(status,exc.code,now(),task['id']))
                 if blocked:raise JobPaused(exc.code)
-                errors.append(str(task['item_id'])+': '+exc.code);consecutive+=1
-                if consecutive>=3:break
+                with error_lock:
+                    errors.append(str(task['item_id'])+': '+exc.code);error_state['consecutive']+=1;stop_errors=error_state['consecutive']>=3
+                if transient(exc) or stop_errors:raise
             finally:self._checkpoint(job,current_item=None,current_title='')
+        self.parallel_work(job,tasks,assess)
         queue=self.store.job(job)['queue']
         return {'analyzed':queue.get('completed',0),'errors':errors,'remaining':queue.get('pending',0)+queue.get('failed',0)}
 
     def digest(self):
+        with self.digest_lock:return self._digest()
+
+    def _digest(self):
         s=self.store.settings();day=(dt.datetime.now(dt.timezone.utc)+dt.timedelta(hours=s['utc_offset'])).date().isoformat()
         ranked=self.store.items(limit=None,sort='relevance',daily=True)
         with self.store.db() as c:
@@ -191,18 +349,42 @@ class Service:
         return {'day':day,'ids':ids}
 
     def scheduler(self):
-        while not self.stop.wait(20):
-            try:self.schedule_tick()
-            except AppError:pass
+        while not self.stop.is_set():
+            try:
+                self.schedule_tick();self.recover_interrupted();self.retry_tick()
+                self.store.put('scheduler_status',{'checked_at':now(),'error':None})
+            except Exception as exc:
+                try:self.store.put('scheduler_status',{'checked_at':now(),'error':exc.code if isinstance(exc,AppError) else type(exc).__name__})
+                except Exception:pass
+            self.stop.wait(20)
+
+    def retry_tick(self,current=None):
+        if not self.store.settings()['auto_resume']:return
+        current=current or dt.datetime.now(dt.timezone.utc)
+        with self.store.db() as c:rows=[dict(r) for r in c.execute("SELECT * FROM runs WHERE status IN ('paused','failed','partial') ORDER BY id")]
+        for row in rows:
+            progress=json.loads(row['progress']);retry=progress.get('retry_at')
+            if not retry or progress.get('pause_requested') or row['error']=='paused_by_user':continue
+            if dt.datetime.fromisoformat(retry)>current:continue
+            try:
+                if row['kind'] in HISTORY_KINDS:self.history.get(json.loads(row['argument']).get('input'),False)
+                self.resume(row['id'],automatic=True)
+            except AppError as exc:
+                if exc.code not in ('job_already_running','too_many_jobs','not_found'):raise
 
     def schedule_tick(self,current=None):
         s=self.store.settings()
-        if not s['schedule_enabled'] or not self.store.get('profile')['active'] or self.lock.locked():return
-        with self.store.db() as c:
-            if c.execute("SELECT 1 FROM runs WHERE status IN ('paused','interrupted') AND kind IN ('collect','analyze') LIMIT 1").fetchone():return
+        if not s['schedule_enabled'] or not self.store.get('profile')['active']:return
         local=(current or dt.datetime.now(dt.timezone.utc))+dt.timedelta(hours=s['utc_offset']);day=local.date().isoformat()
         if local.strftime('%H:%M')<s['schedule_time'] or self.store.get('scheduled_day')==day:return
-        self.start_job('collect');self.store.put('scheduled_day',day)
+        with self.guard:
+            if self.store.get('scheduled_day')==day:return
+            try:job=self.start_job('collect',{'day':day})
+            except AppError as exc:
+                if exc.code in ('job_already_running','too_many_jobs'):return
+                raise
+            self.store.put('scheduled_day',day)
+            if isinstance(job,int):self._checkpoint(job,scheduled_day=day)
 
     def add_source(self,body):
         kind=body.get('kind')
@@ -217,7 +399,7 @@ class Service:
         s=self.store.settings()
         if any(k in body and body[k]!=s[k] for k in ('model','provider','local_url')):s['reasoning_effort']='default'
         enums={'language':['zh-CN','en'],'summary_language':['auto','zh-CN','en'],'provider':['subscription','api','local'],'reasoning_effort':['default',*EFFORTS]}
-        bounds={'daily_ai_limit':(1,500),'daily_digest_limit':(1,50),'utc_offset':(-12,14),'lookback_days':(1,365),'max_per_source':(1,200)}
+        bounds={'daily_ai_limit':(1,500),'daily_digest_limit':(1,50),'utc_offset':(-12,14),'lookback_days':(1,365),'max_per_source':(1,200),'ai_concurrency':(1,8)}
         for key,allowed in enums.items():
             if key in body:
                 if body[key] not in allowed:raise AppError('invalid_setting')
@@ -232,7 +414,8 @@ class Service:
             try:dt.datetime.strptime(body['schedule_time'],'%H:%M')
             except (ValueError,TypeError):raise AppError('invalid_setting')
             s['schedule_time']=body['schedule_time']
-        if 'schedule_enabled' in body:s['schedule_enabled']=bool(body['schedule_enabled'])
+        for key in ('schedule_enabled','auto_resume','adapt_saved'):
+            if key in body:s[key]=bool(body[key])
         if 'model' in body:s['model']=str(body['model']).strip()[:120]
         if 'local_url' in body:s['local_url']=validate_url(str(body['local_url']).strip().rstrip('/'),local=True)
         self.ai.check_effort(s)

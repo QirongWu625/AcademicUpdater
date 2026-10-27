@@ -18,7 +18,7 @@ def encode(value):
     return json.dumps(value, ensure_ascii=False, separators=(',', ':'))
 
 
-DEFAULT_SETTINGS = {'language': 'en', 'summary_language': 'auto', 'provider': 'subscription', 'model': '', 'reasoning_effort':'default', 'local_url': 'http://127.0.0.1:11434/v1', 'daily_ai_limit': 30, 'daily_digest_limit': 10, 'schedule_enabled': True, 'schedule_time': '08:00', 'utc_offset': 10, 'lookback_days': 14, 'max_per_source': 100}
+DEFAULT_SETTINGS = {'language': 'en', 'summary_language': 'auto', 'provider': 'subscription', 'model': '', 'reasoning_effort':'default', 'local_url': 'http://127.0.0.1:11434/v1', 'daily_ai_limit': 30, 'daily_digest_limit': 10, 'schedule_enabled': True, 'schedule_time': '08:00', 'utc_offset': 10, 'lookback_days': 14, 'max_per_source': 100, 'ai_concurrency':3, 'auto_resume':True, 'adapt_saved':True}
 EMPTY_PROFILE = {'topic': '', 'prompt': '', 'exclude': '', 'revision': 0, 'understanding': None, 'understanding_revision': None, 'origin': None, 'active': None}
 
 
@@ -50,6 +50,7 @@ class Store:
             CREATE TABLE IF NOT EXISTS histories(id INTEGER PRIMARY KEY,prompt TEXT NOT NULL,scope TEXT NOT NULL DEFAULT '{}',config TEXT NOT NULL DEFAULT '{}',progress TEXT NOT NULL DEFAULT '{}',report TEXT NOT NULL DEFAULT '{}',status TEXT NOT NULL DEFAULT 'draft',error TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS history_items(history_id INTEGER NOT NULL REFERENCES histories(id),item_id INTEGER NOT NULL REFERENCES items(id),version_id INTEGER NOT NULL,snapshot TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',result TEXT NOT NULL DEFAULT '{}',PRIMARY KEY(history_id,item_id));
             CREATE INDEX IF NOT EXISTS history_items_status ON history_items(history_id,status);
+            CREATE TABLE IF NOT EXISTS run_events(id INTEGER PRIMARY KEY,run_id INTEGER NOT NULL REFERENCES runs(id),at TEXT NOT NULL,event TEXT NOT NULL,detail TEXT NOT NULL DEFAULT '');
             """)
             self._migrate(c)
             c.execute("UPDATE histories SET status='interrupted' WHERE status IN ('planning','searching','analyzing','summarizing')")
@@ -58,6 +59,7 @@ class Store:
             if not c.execute('SELECT 1 FROM sources LIMIT 1').fetchone():
                 c.executemany('INSERT INTO sources(kind,name,url) VALUES(?,?,?)', [('crossref','Crossref','https://api.crossref.org/works'),('arxiv','arXiv','https://export.arxiv.org/api/query')])
             # A terminated process must never leave a job looking active forever.
+            c.execute("INSERT INTO run_events(run_id,at,event,detail) SELECT id,?,'interrupted','process_exit_or_shutdown' FROM runs WHERE status='running'",(now(),))
             c.execute("UPDATE runs SET status='interrupted',finished_at=?,error='Application stopped before this run completed.' WHERE status='running'", (now(),))
             c.execute("UPDATE analysis_tasks SET status='pending',error='interrupted',updated_at=? WHERE status='running'",(now(),))
             c.execute("UPDATE ai_usage SET status='interrupted' WHERE status='started'")
@@ -153,9 +155,42 @@ class Store:
                 return p
             version = (p['active'] or {}).get('version',0) + 1
             p.update(understanding=understanding,understanding_revision=revision,origin=origin)
-            p['active'] = {'version':version,'revision':revision,'topic':p['topic'],'prompt':p['prompt'],'exclude':p['exclude'],'understanding':understanding,'applied_at':now(),'origin':origin}
+            p['active'] = {'version':version,'revision':revision,'topic':p['topic'],'prompt':p['prompt'],'exclude':p['exclude'],'understanding':understanding,'base_understanding':understanding,'applied_at':now(),'origin':origin}
             c.execute("UPDATE kv SET value=? WHERE key='profile'", (encode(p),))
             return p
+
+    def saved_scope_snapshot(self,c=None,include_papers=True):
+        if c is None:
+            with self.db() as db:return self.saved_scope_snapshot(db,include_papers)
+        p=json.loads(c.execute("SELECT value FROM kv WHERE key='profile'").fetchone()[0]);active=p['active']
+        if not active:return None
+        ids=[r['id'] for r in c.execute("SELECT id FROM items WHERE kind='paper' AND saved=1 AND deleted_at IS NULL ORDER BY id")]
+        base=active.get('base_understanding',active['understanding'])
+        fingerprint=hashlib.sha256(encode([active['revision'],active['prompt'],active['exclude'],base,ids]).encode()).hexdigest()
+        # Cover the saved set evenly; expose the sample size rather than imply all abstracts were read.
+        sample_ids=ids if len(ids)<=80 else [ids[round(n*(len(ids)-1)/79)] for n in range(80)]
+        sample=[dict(r) for r in c.execute('SELECT id,title,substr(abstract,1,1500) abstract,published_at FROM items WHERE id IN ('+','.join('?' for _ in sample_ids)+') ORDER BY id',sample_ids)] if include_papers and sample_ids else []
+        return {'fingerprint':fingerprint,'version':active['version'],'ids':ids,'count':len(ids),'base':base,
+                'active':active,'papers':[{**r,'abstract':r['abstract'][:1500]} for r in sample],
+                'changed':active.get('saved_learning',{}).get('fingerprint')!=fingerprint}
+
+    def apply_saved_scope(self,snapshot,understanding):
+        with self.db() as c:
+            c.execute('BEGIN IMMEDIATE');fresh=self.saved_scope_snapshot(c,False)
+            if not fresh or fresh['fingerprint']!=snapshot['fingerprint'] or fresh['version']!=snapshot['version']:raise AppError('saved_scope_changed',status=409)
+            p=json.loads(c.execute("SELECT value FROM kv WHERE key='profile'").fetchone()[0]);active=p['active']
+            changed=active['understanding']!=understanding
+            active.update(base_understanding=snapshot['base'],understanding=understanding,
+                          saved_learning={'fingerprint':snapshot['fingerprint'],'ids':snapshot['ids'],'count':snapshot['count'],'sample_count':len(snapshot['papers']),'updated_at':now()})
+            if changed:active.update(version=active['version']+1,origin='saved_feedback',applied_at=now())
+            # Preserve an unapplied user draft and any manual edits in that draft.
+            if p['revision']==active['revision']:
+                p.update(understanding=understanding,understanding_revision=p['revision'],origin=active['origin'])
+            c.execute("UPDATE kv SET value=? WHERE key='profile'",(encode(p),))
+            return {'changed':changed,'profile':p,'count':snapshot['count'],'sample_count':len(snapshot['papers'])}
+
+    def run_event(self,job,event,detail=''):
+        with self.db() as c:c.execute('INSERT INTO run_events(run_id,at,event,detail) VALUES(?,?,?,?)',(job,now(),event,str(detail)[:600]))
 
     def sources(self):
         with self.db() as c:
@@ -317,6 +352,7 @@ class Store:
             for key in ('argument','progress','result'):result[key]=json.loads(result[key])
             counts={r['status']:r['n'] for r in c.execute('SELECT status,COUNT(*) n FROM analysis_tasks WHERE run_id=? GROUP BY status',(job_id,))}
             result['queue']={'total':sum(counts.values()),**counts}
+            result['events']=[dict(r) for r in c.execute('SELECT at,event,detail FROM run_events WHERE run_id=? ORDER BY id DESC LIMIT 20',(job_id,))]
             return result
 
     def feedback(self,item_id,body):

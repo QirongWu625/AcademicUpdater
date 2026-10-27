@@ -17,6 +17,7 @@ from .network import AppError
 from .service import Service
 from .storage import Store,encode,now
 from .metadata import parse_metrics_csv
+from . import startup
 
 
 class Application:
@@ -26,7 +27,13 @@ class Application:
         self.csrf=secrets.token_urlsafe(32);self.port=0
 
     def bootstrap(self):
-        return {'app':'AcademicUpdater','version':__version__,'csrf':self.csrf,'settings':self.store.settings(),'profile':self.store.get('profile'),'sources':self.store.sources(),'stats':self.store.stats(),'auth':self.auth_status(),'capabilities':self.ai.capabilities(),'histories':self.service.history.list()}
+        with self.store.db() as c:
+            ids=[r[0] for r in c.execute("SELECT id FROM runs WHERE (kind NOT IN ('history_plan','history_search') OR EXISTS(SELECT 1 FROM histories h WHERE h.id=json_extract(runs.argument,'$.input') AND h.deleted_at IS NULL)) ORDER BY CASE WHEN status='running' THEN 0 WHEN status IN ('paused','interrupted','failed') THEN 1 ELSE 2 END,id DESC LIMIT 30")]
+        learning=self.store.saved_scope_snapshot(include_papers=False)
+        return {'app':'AcademicUpdater','version':__version__,'csrf':self.csrf,'settings':self.store.settings(),'profile':self.store.get('profile'),'sources':self.store.sources(),'stats':self.store.stats(),'auth':self.auth_status(),'capabilities':self.ai.capabilities(),'histories':self.service.history.list(),
+                'jobs':[self.store.job(i) for i in ids],'execution':self.service.ai_limiter.state(),'startup':startup.status(),
+                'scheduler':self.store.get('scheduler_status',{}),'scheduled_day':self.store.get('scheduled_day'),
+                'saved_learning':{'pending':learning['changed'],'count':learning['count']} if learning else None}
 
     def auth_status(self):
         return {'accounts':self.oauth.accounts(),'api_key_configured':bool(os.environ.get('OPENAI_API_KEY') or self.vault.get('api_key')),'key_from_environment':bool(os.environ.get('OPENAI_API_KEY')),'last_error':self.oauth.last_error}
@@ -107,7 +114,7 @@ def make_server(app,port):
                     try:enabled=app.oauth.callback(q);app.oauth.last_error='' if enabled else 'subscription_not_authorized'
                     except AppError as exc:app.oauth.last_error=exc.code
                     self.send_response(303);self.send_header('Location','/#ai');self.send_header('Content-Length','0');self.send_header('Cache-Control','no-store');self.end_headers();return
-                files={'/logo.png':'logo.png','/':'index.html','/index.html':'index.html','/app.js':'app.js','/history.js':'history.js','/trash.js':'trash.js','/i18n.js':'i18n.js','/styles.css':'styles.css','/guide':'guide.html'}
+                files={'/logo.png':'logo.png','/':'index.html','/index.html':'index.html','/app.js':'app.js','/history.js':'history.js','/trash.js':'trash.js','/execution.js':'execution.js','/i18n.js':'i18n.js','/styles.css':'styles.css','/guide':'guide.html'}
                 if path not in files:raise AppError('not_found',status=404)
                 file=static/files[path]
                 self.send(file.read_bytes(),(mimetypes.guess_type(str(file))[0] or 'text/plain')+'; charset=utf-8')
@@ -139,6 +146,7 @@ def make_server(app,port):
                     origin='ai' if current['origin']=='ai' and current['understanding']==u and current['understanding_revision']==body.get('revision') else 'manual'
                     return self.json(app.store.apply_profile(body.get('revision'),u,origin))
                 if path=='/api/settings':return self.json(app.service.save_settings(body))
+                if path=='/api/startup':return self.json(startup.configure(bool(body.get('enabled'))))
                 if path=='/api/settings/key':
                     key=str(body.get('key','')).strip()
                     if key and not 10<=len(key)<=2000:raise AppError('invalid_api_key')

@@ -6,7 +6,15 @@
 
 An AI-powered, local-first research assistant for tracking papers and industry updates, discovering influential and foundational work, and organizing a deduplicated personal library.
 
-**Version 1.5.0 · MIT license · Contributions welcome**
+**Version 1.6.0 · MIT license · Contributions welcome**
+
+## Automatic updates and parallel work
+
+Daily updates and independent history searches can run together. Paper assessment shares a fair limit of **3 concurrent AI requests**, adjustable from 1 to 8 in **Personal profile → Sources & schedule**. History processes up to 10 papers per request. Each task has its own pause/resume control; completed results are retained. Up to 8 independent jobs can be active. Model speed, reasoning effort, provider limits and the existing daily request budget still apply.
+
+Enable **Windows login startup** to launch in the background after signing in. The scheduler catches up that day's missed update after the configured time, and the next day's collection can start while an older analysis continues. The computer must be awake and online. Unexpected process exits resume from saved progress after restart; transient network failures use bounded retries, daily-budget pauses continue after local midnight, and manual pauses stay paused. Recent activity shows interruption causes and retry times. After five automatic job retries, or for authentication/configuration errors, resolve the displayed issue and resume manually.
+
+**Learn from saved papers** refines the understood field before a new collection only when the current saved set changes, including unsaving or deleting/restoring saved papers. It recomputes from your original applied field and explicit exclusions, so removed papers stop contributing positive evidence. No change means no learning request; removing all saves restores the baseline without AI. For more than 80 saved papers, an evenly distributed sample is used and its size is shown. Your original prompt, pending drafts, old analyses and independently configured historical searches remain available. If learning fails, collection uses the existing field and reports the deferred update.
 
 ## Manage your collection
 

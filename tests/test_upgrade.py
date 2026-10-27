@@ -118,6 +118,7 @@ class QueueTests(unittest.TestCase):
         self.assertFalse(service.lock.locked())
 
     def test_pause_resume_only_processes_remaining_and_keeps_snapshot(self):
+        self.store.put('settings',{**self.store.settings(),'ai_concurrency':1})
         for n in range(3):self.add(n)
         started=threading.Event();release=threading.Event();calls=[];profiles=[];service=None
         def analyze(item_id,profile,settings,expected_version):
