@@ -44,20 +44,69 @@ def openalex(path,params=None,semantic=False):
 
 
 def normalized(value):
+    if not isinstance(value,str):return ''
     return re.sub(r'[^a-z0-9\u4e00-\u9fff]+',' ',''.join(c for c in unicodedata.normalize('NFKD',value).casefold() if not unicodedata.combining(c))).strip()
 
 
+def objects(value):
+    """Optional OpenAlex collections can be null, including institutional data."""
+    return [x for x in value if isinstance(x,dict)] if isinstance(value,list) else []
+
+
+def institution_matches(requested,name):
+    return any(set(normalized(alias).split())<=set(normalized(name).split())
+               for alias in re.split(r'[/／;|]',requested) if normalized(alias))
+
+
+def author_affiliation_evidence(identifier,institution):
+    # Companies may appear only in the author's raw byline, without a normalized
+    # institution entity. Never borrow the affiliation of another coauthor.
+    data=openalex('works',{'filter':'authorships.author.id:'+identifier.rsplit('/',1)[1],
+                          'per_page':100,'sort':'publication_date:desc',
+                          'select':'id,title,authorships,publication_date'})
+    evidence=[]
+    for work in objects(data.get('results')):
+        work_id=work.get('id')
+        if not isinstance(work_id,str) or not re.fullmatch(r'https://openalex.org/W\d+',work_id):continue
+        for authorship in objects(work.get('authorships')):
+            author=authorship.get('author') or {}
+            if not isinstance(author,dict) or author.get('id')!=identifier:continue
+            raw=authorship.get('raw_affiliation_strings') or []
+            names=[n for n in raw if isinstance(n,str)] if isinstance(raw,list) else []
+            names += [i.get('display_name') for i in objects(authorship.get('institutions')) if isinstance(i.get('display_name'),str)]
+            match=next((n for n in names if institution_matches(institution,n)),None)
+            if match:
+                evidence.append({'source_url':work_id,'title':work.get('title') or work_id,
+                                 'affiliation':match,'author_id':identifier})
+                break
+        if len(evidence)==3:break
+    return evidence
+
+
 def resolve_author(plan):
-    data=openalex('authors',{'search':plan['author_name'],'per_page':25});candidates=[]
-    for row in data.get('results',[]):
-        institutions=list({x.get('display_name','') for x in row.get('last_known_institutions',[]) if x.get('display_name')}|{a.get('institution',{}).get('display_name','') for a in row.get('affiliations',[]) if a.get('institution',{}).get('display_name')})
-        names=[row.get('display_name',''),*(row.get('display_name_alternatives') or [])]
+    data=openalex('authors',{'search':plan['author_name'],'per_page':25});candidates=[];unmatched=[]
+    for row in objects(data.get('results')):
+        entries=objects(row.get('last_known_institutions'))+objects([a.get('institution') for a in objects(row.get('affiliations'))])
+        institutions=sorted({x['display_name'] for x in entries if isinstance(x.get('display_name'),str) and x['display_name'].strip()})
+        aliases=row.get('display_name_alternatives')
+        names=[row.get('display_name',''),*(aliases if isinstance(aliases,list) else [])]
         name_match=normalized(plan['author_name']) in {normalized(n) for n in names}
-        institution_match=not plan['institution'] or any(set(normalized(alias).split())<=set(normalized(i).split()) for alias in re.split(r'[/／;|]',plan['institution']) if normalized(alias) for i in institutions)
-        orcid_match=not plan['orcid'] or (row.get('orcid') or '').removeprefix('https://orcid.org/')==plan['orcid'].removeprefix('https://orcid.org/')
-        if name_match and institution_match and orcid_match and re.fullmatch(r'https://openalex.org/A\d+',row.get('id','')):
-            candidates.append({'id':row['id'],'name':row['display_name'],'orcid':row.get('orcid') or '',
-                               'institutions':sorted(institutions),'works_count':row.get('works_count',0),'source_url':row['id'],'verified_at':dt.datetime.now(dt.timezone.utc).isoformat()})
+        institution_match=not plan['institution'] or any(institution_matches(plan['institution'],i) for i in institutions)
+        orcid=row.get('orcid') if isinstance(row.get('orcid'),str) else ''
+        orcid_match=not plan['orcid'] or orcid.removeprefix('https://orcid.org/')==plan['orcid'].removeprefix('https://orcid.org/')
+        identifier=row.get('id')
+        if name_match and orcid_match and isinstance(identifier,str) and re.fullmatch(r'https://openalex.org/A\d+',identifier):
+            candidate={'id':identifier,'name':row.get('display_name') or plan['author_name'],'orcid':orcid,
+                       'institutions':institutions,'works_count':row.get('works_count') or 0,'source_url':identifier,'verified_at':dt.datetime.now(dt.timezone.utc).isoformat()}
+            (candidates if institution_match else unmatched).append(candidate)
+    # A bounded fallback needs positive byline evidence, never a name-only guess.
+    if not candidates and plan['institution'] and len(unmatched)<=3:
+        for candidate in unmatched:
+            evidence=author_affiliation_evidence(candidate['id'],plan['institution'])
+            if evidence:
+                candidate['institution_evidence']=evidence
+                candidate['institutions']=sorted(set(candidate['institutions'])|{e['affiliation'] for e in evidence})
+                candidates.append(candidate)
     if len(candidates)!=1:raise AppError('author_identity_ambiguous','Matching identities: '+str(len(candidates))+'. Refine the full name, institution or ORCID.')
     return candidates[0]
 

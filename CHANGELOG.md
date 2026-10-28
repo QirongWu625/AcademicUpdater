@@ -1,5 +1,13 @@
 # Changelog / 更新记录
 
+## 1.9.2 — 2026-10-28
+
+- Handle null author institution lists and incomplete affiliation records without aborting author interpretation.
+- When a requested company is missing from an author profile, check the same author ID in up to 100 recent paper bylines. Retain linked evidence, reject coauthor affiliations and ambiguous matches, and keep author searches across the full career.
+- Show the affiliation evidence in Chinese and English and let failed interpretation tasks resume without losing saved data.
+
+修复作者机构信息为空导致的 TypeError；支持用本人论文署名中的原始机构名称核对公司任职，展示来源依据，避免误用共同作者的机构。
+
 ## 1.9.1 — 2026-10-28
 
 - Keep expanded and collapsed sections stable during live refreshes, including task records, nested task events, research-history coverage and paper evidence. Match sections by record ID, not list position or translated text.

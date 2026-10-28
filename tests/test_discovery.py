@@ -30,6 +30,60 @@ class DiscoveryTests(unittest.TestCase):
             with self.assertRaises(AppError) as error:resolve_author(author_plan())
             self.assertEqual(error.exception.code,'author_identity_ambiguous')
 
+    def test_nullable_author_institutions_do_not_break_other_candidates(self):
+        missing={'id':'https://openalex.org/A999','display_name':'Another Researcher',
+                 'last_known_institutions':None,'affiliations':None,'display_name_alternatives':[None]}
+        candidate={**identity(),'last_known_institutions':[None,{'display_name':None}],
+                   'affiliations':[None,{'institution':None},*identity()['affiliations']]}
+        with patch('academic_updater.discovery.openalex',return_value={'results':[None,missing,candidate]}):
+            self.assertEqual(resolve_author(author_plan())['id'],AUTHOR)
+
+    def test_company_identity_uses_raw_byline_for_the_same_author(self):
+        plan=author_plan(institution='Example Neurotechnology')
+        record=work();record['authorships'][0]['raw_affiliation_strings']=['Example Neurotechnology Pty Ltd, Australia']
+        record['authorships'][0]['institutions']=None
+        candidate={**identity(),'last_known_institutions':None,'affiliations':None}
+        with patch('academic_updater.discovery.openalex',side_effect=[{'results':[candidate]},{'results':[record]}]) as api:
+            result=resolve_author(plan)
+        evidence=result['institution_evidence'][0]
+        self.assertEqual(evidence['source_url'],record['id']);self.assertEqual(evidence['author_id'],AUTHOR)
+        self.assertIn('Example Neurotechnology Pty Ltd, Australia',result['institutions'])
+        self.assertEqual(api.call_args.args[1]['filter'],'authorships.author.id:A1234')
+
+    def test_company_identity_rejects_coauthor_affiliation_and_wrong_orcid(self):
+        record=work(author='https://openalex.org/A999')
+        record['authorships'][0]['raw_affiliation_strings']=['Example Neurotechnology']
+        record['authorships'] += [None,{'author':None,'raw_affiliation_strings':['Example Neurotechnology']},
+                                  {'author':{'id':AUTHOR},'raw_affiliation_strings':None,'institutions':None}]
+        with patch('academic_updater.discovery.openalex',side_effect=[{'results':[identity()]},{'results':[record]}]):
+            with self.assertRaises(AppError) as error:resolve_author(author_plan(institution='Example Neurotechnology'))
+            self.assertEqual(error.exception.code,'author_identity_ambiguous')
+        with patch('academic_updater.discovery.openalex',return_value={'results':[identity()]}) as api:
+            with self.assertRaises(AppError):resolve_author(author_plan(institution='Example Neurotechnology',orcid='0000-0001-7835-1116'))
+            self.assertEqual(api.call_count,1)
+
+    def test_multiple_matching_company_authors_remain_ambiguous(self):
+        first=work();second=work(2,'https://openalex.org/A5678')
+        for row in [first,second]:row['authorships'][0]['raw_affiliation_strings']=['Example Neurotechnology']
+        with patch('academic_updater.discovery.openalex',side_effect=[{'results':[identity(),identity('https://openalex.org/A5678')]},{'results':[first]},{'results':[second]}]):
+            with self.assertRaises(AppError) as error:resolve_author(author_plan(institution='Example Neurotechnology'))
+            self.assertEqual(error.exception.code,'author_identity_ambiguous')
+
+    def test_failed_author_interpretation_can_resume_with_nullable_records(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store=Store(folder);ai=Mock();service=Service(store,ai)
+            ai.generate.return_value={**scope(),'retrieval':author_plan(institution='Example Neurotechnology')}
+            h=service.history.save({'prompt':'All papers by the founder of Example Neurotechnology'})
+            record=work();record['authorships'][0]['raw_affiliation_strings']=['Example Neurotechnology']
+            candidate={**identity(),'last_known_institutions':None,'affiliations':None}
+            service.history.update(h['id'],status='failed',error='TypeError')
+            with patch('academic_updater.discovery.openalex',side_effect=[{'results':[candidate]},{'results':[record]}]):
+                service.history.plan(h['id'],store.settings())
+            saved=service.history.get(h['id'],False)
+            self.assertEqual(saved['status'],'draft');self.assertEqual(saved['error'],'')
+            self.assertEqual(saved['config']['discovery_mode'],'author')
+            self.assertEqual(saved['scope']['author_identity']['institution_evidence'][0]['author_id'],AUTHOR)
+
     def test_orcid_can_disambiguate_and_wrong_institution_fails(self):
         other=identity('https://openalex.org/A5678');other['orcid']='https://orcid.org/0000-0001-7835-1116'
         with patch('academic_updater.discovery.openalex',return_value={'results':[identity(),other]}):
