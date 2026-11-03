@@ -168,6 +168,7 @@ document.addEventListener('change',async e=>{if(e.target.id!=='login-startup')re
 
 Object.assign(COPY,{
   abstract_retrieval:['Retrieve missing abstracts','自动补充摘要'],
+  analysis:['Reassess papers','重新评估论文'],
   abstract_history:['Reassess historical searches','重新评估历史检索'],
   abstractAlreadyRunning:['Abstract recovery is already running. Showing its progress.','摘要补全正在运行，已显示当前任务进度。'],
   abstractFound:['Abstracts recovered','已补齐摘要'],
