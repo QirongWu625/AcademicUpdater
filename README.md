@@ -6,7 +6,11 @@
 
 An AI-powered, local-first research assistant for tracking papers and industry updates, discovering influential and foundational work, and organizing a deduplicated personal library.
 
-**Version 1.9.0 · MIT license · Contributions welcome**
+**Version 1.10.0 · MIT license · Contributions welcome**
+
+## Automatic abstract recovery
+
+Missing abstracts in new and existing papers are retrieved from Europe PMC, OpenAlex, arXiv and explicit publisher abstract metadata, using DOI or other verified identifiers. Original source snapshots, saved states and notes remain intact. Recovered text and its source URL are saved as a new version, then daily relevance and affected historical assessments are refreshed. Public metadata retrieval uses up to three workers; AI reassessment follows your existing parallelism and model settings. Interrupted work resumes; unavailable abstracts are retried after 30 days, source errors after six hours, or manually from Today. No abstract is generated from model memory. Daily recommendations include only current **high or medium relevance** assessments; uncertain, unanalyzed and low-relevance records remain available in the library. Some sources have no abstract or restrict access, so recovery is not guaranteed.
 
 ## Semantic discovery and author searches
 

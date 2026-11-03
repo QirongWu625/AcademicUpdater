@@ -96,7 +96,10 @@ class StoreTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=8) as pool:self.assertEqual(sum(pool.map(reserve,range(12))),3)
 
     def test_digest_does_not_duplicate_versions(self):
-        self.apply_scope();self.store.ingest(1,record());service=Service(self.store,Mock())
+        from test_upgrade import save_analysis
+        self.apply_scope();item=self.store.ingest(1,record())['id'];service=Service(self.store,Mock())
+        self.assertEqual(service.digest()['ids'],[])
+        save_analysis(self.store,item,'high')
         self.assertEqual(service.digest(),service.digest())
         with self.store.db() as c:self.assertEqual(c.execute('SELECT count(*) FROM delivered').fetchone()[0],1)
 

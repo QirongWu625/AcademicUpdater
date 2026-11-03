@@ -1,5 +1,12 @@
 # Changelog / 更新记录
 
+## 1.10.0
+
+- Recover missing abstracts automatically for new and existing papers using identifier-matched Europe PMC, OpenAlex, arXiv and publisher abstract metadata. Persist source evidence, original snapshots, retry windows and interruption checkpoints.
+- Reassess enriched daily papers and affected historical searches, preserving saved states, notes and research scopes. Missing evidence stays explicit; recovered abstracts are never AI-invented.
+- Daily reading lists accept only current high/medium relevance assessments, including filtering previously saved lists. Show bilingual abstract-recovery progress and a retry control.
+
+
 ## 1.9.2 — 2026-10-28
 
 - Handle null author institution lists and incomplete affiliation records without aborting author interpretation.

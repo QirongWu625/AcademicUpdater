@@ -34,7 +34,7 @@ class Application:
         for job in jobs:job['ai_state']=self.service.job_ai_state(job)
         return {'app':'AcademicUpdater','version':__version__,'csrf':self.csrf,'settings':self.store.settings(),'profile':self.store.get('profile'),'sources':[s for s in self.store.sources() if s['kind']!='scispace_import'],'stats':self.store.stats(),'auth':self.auth_status(),'capabilities':self.ai.capabilities(),'histories':self.service.history.list(),
                 'jobs':jobs,'execution':self.service.ai_limiter.state(),'startup':startup.status(),
-                'scheduler':self.store.get('scheduler_status',{}),'scheduled_day':self.store.get('scheduled_day'),'local_day':self.service.local_day(),
+                'scheduler':self.store.get('scheduler_status',{}),'scheduled_day':self.store.get('scheduled_day'),'local_day':self.service.local_day(),'abstracts_status':self.service.abstracts.status(),
                 'journal_metrics_status':self.store.metric_status(),'journal_lookup_blocked':self.store.get('journal_lookup_blocked',{}),'journal_metric_failures':self.store.metric_failures(),
                 'saved_learning':{'pending':learning['changed'],'count':learning['count']} if learning else None}
 
@@ -100,7 +100,8 @@ def make_server(app,port):
                     return self.json(app.store.job(int(path.rsplit('/',1)[1])))
                 if path=='/api/digest':
                     with app.store.db() as c:row=c.execute('SELECT * FROM digests ORDER BY day DESC LIMIT 1').fetchone()
-                    return self.json({'day':row['day'],'ids':json.loads(row['item_ids'])} if row else {'day':None,'ids':[]})
+                    allowed={i['id'] for i in app.store.items(limit=None,daily=True) if not i['ignored'] and (i['analysis'] or {}).get('relevance') in ('high','medium')}
+                    return self.json({'day':row['day'],'ids':[i for i in json.loads(row['item_ids']) if i in allowed]} if row else {'day':None,'ids':[]})
                 if path=='/api/export':
                     with app.store.db() as c:ids=[r[0] for r in c.execute('SELECT id FROM items WHERE deleted_at IS NULL ORDER BY id')]
                     if q.get('format')=='csv':
@@ -153,6 +154,7 @@ def make_server(app,port):
                     return self.json(app.store.apply_profile(body.get('revision'),u,origin))
                 if path=='/api/dataset/clear':return self.json(app.service.clear_dataset(body.get('confirmation')))
                 if path=='/api/metrics/refresh':return self.json(app.service.refresh_metrics())
+                if path=='/api/abstracts/refresh':return self.json(app.service.refresh_abstracts())
                 if path=='/api/settings':return self.json(app.service.save_settings(body))
                 if path=='/api/startup':return self.json(startup.configure(bool(body.get('enabled'))))
                 if path=='/api/settings/key':

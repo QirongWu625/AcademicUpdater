@@ -9,6 +9,30 @@ class CollectAPITests(unittest.TestCase):
     tearDown=test_trash.TrashAPITests.tearDown
     fetch=test_trash.TrashAPITests.fetch
 
+    def test_old_digest_filtered_on_read_without_mutation(self):
+        from test_core import record,scope
+        from test_upgrade import save_analysis
+        from academic_updater.storage import encode,now
+        profile=self.app.store.save_profile({'revision':0,'prompt':'Research'})
+        self.app.store.apply_profile(profile['revision'],scope())
+        ids=[self.app.store.ingest(1,record(doi=f'10.1234/filter{i}',external_id=f'filter{i}',url=f'https://example.org/filter{i}'))['id'] for i in range(3)]
+        for item_id,relevance in zip(ids,['medium','uncertain','low']):save_analysis(self.app.store,item_id,relevance)
+        with self.app.store.db() as c:c.execute('INSERT INTO digests VALUES(?,?,?)',('2026-11-03',encode(ids),now()))
+        self.assertEqual(json.loads(self.fetch('/api/digest'))['ids'],ids[:1])
+        with self.app.store.db() as c:self.assertEqual(json.loads(c.execute('SELECT item_ids FROM digests').fetchone()[0]),ids)
+
+    def test_abstract_refresh_is_idempotent_while_running(self):
+        started=threading.Event();release=threading.Event()
+        def run(*args):started.set();release.wait(5);return {}
+        with patch.object(self.app.service.abstracts,'run',side_effect=run):
+            try:
+                first=json.loads(self.fetch('/api/abstracts/refresh',{}));self.assertTrue(started.wait(2))
+                second=json.loads(self.fetch('/api/abstracts/refresh',{}))
+                self.assertEqual(first['job_id'],second['job_id']);self.assertTrue(second['already_running'])
+            finally:
+                release.set();end=time.monotonic()+5
+                while self.app.service.lock.locked() and time.monotonic()<end:time.sleep(.01)
+
     def test_repeat_collect_returns_existing_task_over_http(self):
         started=threading.Event();release=threading.Event()
         def collect(*args):started.set();release.wait(5)

@@ -129,7 +129,7 @@ function syncJobs(){
 async function job(path,body={},kind){
   const result=await api(path,body);if(result.empty){await bootstrap();await render();notify(t('metricNoPending'));return}jobStates.set(result.job_id,'running');
   if(!result.already_running)notify(t('jobWorking'));
-  await bootstrap();await render();if(result.already_running){if(kind==='journal_metrics'){notify(t('metricAlreadyRunning'));$('#job-card-'+result.job_id)?.scrollIntoView({behavior:'smooth',block:'center'})}else focusCollection(result.job_id)}poll();
+  await bootstrap();await render();if(result.already_running){if(kind==='journal_metrics'){notify(t('metricAlreadyRunning'));$('#job-card-'+result.job_id)?.scrollIntoView({behavior:'smooth',block:'center'})}else if(kind==='abstract_retrieval'){notify(t('abstractAlreadyRunning'));$('#job-card-'+result.job_id)?.scrollIntoView({behavior:'smooth',block:'center'})}else focusCollection(result.job_id)}poll();
 }
 function poll(){
   if(jobPollActive)return;jobPollActive=true;
@@ -139,11 +139,12 @@ function poll(){
     finally{jobPollActive=false;if(shouldPoll())poll()}
   },runningJobs().length?2000:5000);
 }
-function resumable(r){return ['collect','analyze','history_plan','history_search','item_analysis','interpret','journal_metrics'].includes(r.kind)&&(['paused','interrupted','failed'].includes(r.status)||(r.status==='partial'&&!!(r.result?.errors?.length||r.result?.analysis?.errors?.length)))}
+function resumable(r){return ['collect','analyze','history_plan','history_search','item_analysis','interpret','journal_metrics','abstract_retrieval'].includes(r.kind)&&(['paused','interrupted','failed'].includes(r.status)||(r.status==='partial'&&!!(r.result?.errors?.length||r.result?.analysis?.errors?.length)))}
 function jobControls(r){const p=r.progress||{};return r.status==='running'?btn('pause-job','pauseJob',false,`data-id="${r.id}" ${p.pause_requested?'disabled':''}`):resumable(r)?btn('resume-job','resumeJob',false,`data-id="${r.id}" data-kind="${r.kind}"`):''}
 function jobStatus(r){if(r.kind==='journal_metrics'&&r.status==='complete'&&(r.result?.failed||r.result?.unavailable))return t('metricRunFinished');return t(r.kind==='collect'&&r.status==='complete'&&r.result?.truncated?.length?'completeLimited':r.status)}
 function jobInfo(r){
   const p=r.progress||{},q=r.queue||{};
+  if(r.kind==='abstract_retrieval')return `${t(p.phase||'abstract_retrieval')} · ${p.abstract_processed||0} / ${p.abstract_total||0} · ${t('abstractFound')}: ${p.abstract_found||0}${q.total?' · '+t('analyzedCount')+': '+(q.completed||0)+' / '+q.total:''}`;
   if(r.kind==='journal_metrics'){const c=p.journal_counts||r.result||{};return `${t('metricProcessed')}: ${c.processed||0} · ${t('metricFound')}: ${c.found||0} · ${t('metricReferences')}: ${c.reference||0} · ${t('metricUnavailable')}: ${c.unavailable||0} · ${t('metricErrors')}: ${c.failed||0}`}
   return r.kind.startsWith('history_')?`${p.history_collected||0} ${t('historyCollected')} · ${p.history_analyzed||0} ${t('historyAnalyzed')}`:q.total?`${q.completed||0} / ${q.total}`:t(p.phase||r.status);
 }
@@ -164,3 +165,20 @@ function automationControls(){const s=S.boot.settings;return `<hr><h3>${esc(t('e
 function automationStatus(){return `<div class="automation-status">${S.boot.startup?.supported?`<label class="check"><input id="login-startup" type="checkbox" ${S.boot.startup.enabled?'checked':''}>${esc(t('loginStartup'))}</label>`:''}<p class="small muted">${esc(t('startupHelp'))}</p><p class="tiny muted">${esc(t('scheduledDay'))}: ${esc(S.boot.scheduled_day||'—')}<br>${esc(t('schedulerChecked'))}: ${esc(displayDate(S.boot.scheduler?.checked_at))}</p>${S.boot.scheduler?.error?`<p class="warning">${esc(errorText(S.boot.scheduler.error))}</p>`:''}</div>`}
 function learningStatus(){const active=S.boot.profile.active,l=active?.saved_learning,state=S.boot.saved_learning;if(!active)return '';return `<section id="learning-status" class="strip"><strong>${esc(t('adaptSaved'))}</strong><p class="small">${esc(t(!state?.count&&!l?.count?'learningEmpty':state?.pending?'learningPending':'learningCurrent'))}</p>${l?`<p class="tiny muted">${esc(t('learningEvidence'))}: ${l.count} / ${l.sample_count} · ${esc(displayDate(l.updated_at))}</p>`:''}${active.origin==='saved_feedback'?`<p class="small"><strong>${esc(translated(active.understanding,'field'))}</strong><br>${esc(translated(active.understanding,'rationale'))}</p>`:''}</section>`}
 document.addEventListener('change',async e=>{if(e.target.id!=='login-startup')return;const enabled=e.target.checked;try{S.boot.startup=await api('/api/startup',{enabled});notify(t('startupSaved'))}catch(err){e.target.checked=!enabled;fail(err)}});
+
+Object.assign(COPY,{
+  abstract_retrieval:['Retrieve missing abstracts','自动补充摘要'],
+  abstract_history:['Reassess historical searches','重新评估历史检索'],
+  abstractAlreadyRunning:['Abstract recovery is already running. Showing its progress.','摘要补全正在运行，已显示当前任务进度。'],
+  abstractFound:['Abstracts recovered','已补齐摘要'],
+  abstractMissing:['Still missing abstracts','仍缺少摘要'],
+  abstractRetry:['Retrieve / retry missing abstracts','补充／重试缺失摘要'],
+  abstractHelp:['Abstracts are matched by identifiers across Europe PMC, OpenAlex, arXiv and publisher metadata. Existing papers are included; recovered evidence triggers reassessment. Only confirmed high or medium relevance enters recommendations.','按唯一标识从 Europe PMC、OpenAlex、arXiv 和期刊页面补摘要，包含已有论文；补齐后重新评估。推荐清单只收录已确认高度相关或相关的资料。'],
+  abstractNotFound:['No abstract found','暂未找到摘要'],
+  abstractErrors:['Source errors (will retry)','来源暂不可用（稍后重试）'],
+  abstractInsufficient:['Missing abstract · insufficient evidence','缺少摘要 · 证据不足']
+});
+function abstractProgressHTML(){
+  const a=S.boot.abstracts_status||{};
+  return `<section class="panel"><h3>${esc(t('abstract_retrieval'))}</h3><p class="small">${esc(t('abstractFound'))}: ${a.found||0} · ${esc(t('abstractMissing'))}: ${a.missing||0} · ${esc(t('abstractNotFound'))}: ${a.unavailable||0} · ${esc(t('abstractErrors'))}: ${a.error||0}</p><p class="small muted">${esc(t('abstractHelp'))}</p>${btn('abstracts-refresh','abstractRetry')}</section>`;
+}

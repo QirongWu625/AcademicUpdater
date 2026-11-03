@@ -46,6 +46,7 @@ class Store:
             CREATE TABLE IF NOT EXISTS journal_metrics(id INTEGER PRIMARY KEY,journal TEXT NOT NULL,journal_key TEXT NOT NULL,issns TEXT NOT NULL DEFAULT '[]',year INTEGER NOT NULL,impact_factor REAL NOT NULL,source TEXT NOT NULL,source_url TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL,UNIQUE(journal_key,year));
             CREATE TABLE IF NOT EXISTS journal_lookups(journal_key TEXT PRIMARY KEY,journal TEXT NOT NULL,issns TEXT NOT NULL DEFAULT '[]',status TEXT NOT NULL DEFAULT 'pending',error TEXT NOT NULL DEFAULT '',evidence TEXT NOT NULL DEFAULT '{}',updated_at TEXT NOT NULL,retry_at TEXT);
             CREATE TABLE IF NOT EXISTS analysis_tasks(id INTEGER PRIMARY KEY,run_id INTEGER NOT NULL REFERENCES runs(id),item_id INTEGER NOT NULL REFERENCES items(id),version_id INTEGER NOT NULL,profile_version INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'pending',attempts INTEGER NOT NULL DEFAULT 0,error TEXT,updated_at TEXT NOT NULL,UNIQUE(run_id,item_id));
+            CREATE TABLE IF NOT EXISTS abstract_lookups(item_id INTEGER PRIMARY KEY REFERENCES items(id),version_id INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'pending',evidence TEXT NOT NULL DEFAULT '{}',updated_at TEXT NOT NULL,retry_at TEXT);
             ''')
             c.executescript("""
             CREATE TABLE IF NOT EXISTS histories(id INTEGER PRIMARY KEY,prompt TEXT NOT NULL,scope TEXT NOT NULL DEFAULT '{}',config TEXT NOT NULL DEFAULT '{}',progress TEXT NOT NULL DEFAULT '{}',report TEXT NOT NULL DEFAULT '{}',status TEXT NOT NULL DEFAULT 'draft',error TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
@@ -67,6 +68,7 @@ class Store:
             c.execute("UPDATE runs SET status='interrupted',finished_at=?,error='Application stopped before this run completed.' WHERE status='running'", (now(),))
             c.execute("UPDATE analysis_tasks SET status='pending',error='interrupted',updated_at=? WHERE status='running'",(now(),))
             c.execute("UPDATE journal_lookups SET status='pending',error='',retry_at=NULL WHERE status='running'")
+            c.execute("UPDATE abstract_lookups SET status='pending',retry_at=NULL WHERE status='running'")
             c.execute("UPDATE ai_usage SET status='interrupted' WHERE status='started'")
 
     def _migrate(self,c):
@@ -326,7 +328,9 @@ class Store:
             row=c.execute('SELECT * FROM items WHERE id=?',(item_id,)).fetchone()
             if not row or (row['deleted_at'] and not include_deleted): raise AppError('not_found',status=404)
             result=dict(row);result['authors']=json.loads(result['authors']);result['issns']=json.loads(result['issns'])
-            result['sources']=[dict(r) for r in c.execute('SELECT r.id,r.url,r.external_id,r.last_seen,s.name FROM source_records r LEFT JOIN sources s ON r.source_id=s.id WHERE r.item_id=?',(item_id,))]
+            result['sources']=[dict(r) for r in c.execute("SELECT r.id,r.url,r.external_id,r.last_seen,COALESCE(s.name,json_extract(r.raw_json,'$.retrieval.source')) AS name FROM source_records r LEFT JOIN sources s ON r.source_id=s.id WHERE r.item_id=?",(item_id,))]
+            lookup=c.execute('SELECT status,evidence,updated_at,retry_at FROM abstract_lookups WHERE item_id=?',(item_id,)).fetchone()
+            result['abstract_lookup']={**dict(lookup),'evidence':json.loads(lookup['evidence'])} if lookup else None
             result['versions']=[dict(r) for r in c.execute('SELECT id,label,title,abstract,observed_at,record_id FROM versions WHERE item_id=? ORDER BY id DESC',(item_id,))]
             result['identifiers']=[r[0] for r in c.execute('SELECT key FROM identifiers WHERE item_id=?',(item_id,))]
             result['analyses']=[{**dict(r),'result':json.loads(r['result'])} for r in c.execute('SELECT * FROM analyses WHERE item_id=? ORDER BY id DESC LIMIT 20',(item_id,))]
@@ -349,7 +353,7 @@ class Store:
         backup=self.backup();counts=self.dataset_counts()
         with self.db() as c:
             c.execute('BEGIN IMMEDIATE')
-            for table in ('history_items','analysis_tasks','run_events','analyses','versions','source_records','identifiers','delivered','digests','histories','runs','items','journal_metrics','journal_lookups'):c.execute('DELETE FROM '+table)
+            for table in ('abstract_lookups','history_items','analysis_tasks','run_events','analyses','versions','source_records','identifiers','delivered','digests','histories','runs','items','journal_metrics','journal_lookups'):c.execute('DELETE FROM '+table)
             c.execute("UPDATE sources SET last_success=NULL,last_status=NULL,last_error=NULL")
             settings=json.loads(c.execute("SELECT value FROM kv WHERE key='settings'").fetchone()[0]);settings['schedule_enabled']=False
             c.execute("UPDATE kv SET value=? WHERE key='settings'",(encode(settings),))

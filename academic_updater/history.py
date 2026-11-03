@@ -316,7 +316,9 @@ class History:
             if config.get('discovery_mode')=='landmark':a['selection']=landmark_selection(next(i for i in batch if i['id']==a['id']),a,config)
             a['ai']={k:settings.get(k,'default' if k=='reasoning_effort' else '') for k in ('provider','model','reasoning_effort')}
         with self.store.db() as c:
-            for a in answers:c.execute("UPDATE history_items SET status='completed',result=? WHERE history_id=? AND item_id=?",(encode(a),hid,a['id']))
+            for a in answers:
+                original=next(i for i in batch if i['id']==a['id'])
+                c.execute("UPDATE history_items SET status='completed',result=? WHERE history_id=? AND item_id=? AND json_extract(snapshot,'$.abstract')=?",(encode(a),hid,a['id'],original['abstract']))
 
     def synthesize(self,h,settings):
         candidates=[i for i in h['items'] if i['history_analysis'].get('relevance') in ('high','medium') and re.match(r'^\d{4}',i.get('published_at') or '')]

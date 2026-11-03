@@ -13,6 +13,7 @@ from .history import History,HISTORY_KINDS
 from .execution import AILimiter,BLOCKED,transient
 from .ai import PROFILE_SCHEMA,validate_scope
 from .journal_lookup import JournalLookup
+from .abstracts import Abstracts
 
 class JobPaused(Exception):
     def __init__(self,code='paused_by_user'):self.code=code
@@ -25,7 +26,8 @@ class Service:
         self.digest_lock=threading.Lock();self.profile_lock=threading.Lock();self.item_locks={}
         self.request_guard=threading.Lock();self.ai_requests={}
         self.ai_limiter=AILimiter(lambda:self.store.settings()['ai_concurrency'])
-        self.history=History(self);self.journals=JournalLookup(self)
+        self.history=History(self);self.journals=JournalLookup(self);self.abstracts=Abstracts(self)
+        self.abstract_history_claims=set()
 
     def group(self,kind,argument):
         if kind=='collect':return (kind,(argument or {}).get('day'))
@@ -56,6 +58,7 @@ class Service:
 
     def _claim(self,kind,argument):
         group=self.group(kind,argument)
+        if group in self.abstract_history_claims:raise AppError('job_already_running',status=409)
         if any(w['group']==group for w in self.workers.values()):raise AppError('job_already_running',status=409)
         if len(self.workers)>=16:raise AppError('too_many_jobs',status=409)
         if not self.workers and not self.lock.acquire(False):raise AppError('job_already_running',status=409)
@@ -86,7 +89,7 @@ class Service:
 
     def resume(self,job,automatic=False):
         row=self.store.job(job)
-        if row['kind'] not in ('collect','analyze','item_analysis','interpret','journal_metrics',*HISTORY_KINDS) or row['status'] not in ('interrupted','paused','partial','failed'):raise AppError('job_not_resumable')
+        if row['kind'] not in ('collect','analyze','item_analysis','interpret','journal_metrics','abstract_retrieval',*HISTORY_KINDS) or row['status'] not in ('interrupted','paused','partial','failed'):raise AppError('job_not_resumable')
         with self.guard:
             argument=row['argument'];progress=row['progress']
             if row['kind']=='collect' and argument and argument.get('input') is None:
@@ -124,7 +127,7 @@ class Service:
 
     def recover_interrupted(self):
         if not self.store.settings()['auto_resume']:return
-        with self.store.db() as c:rows=c.execute("SELECT id,progress FROM runs WHERE kind IN ('collect','analyze','item_analysis','interpret','history_plan','history_search','journal_metrics') AND status='interrupted' AND (kind NOT IN ('history_plan','history_search') OR EXISTS(SELECT 1 FROM histories h WHERE h.id=json_extract(runs.argument,'$.input') AND h.deleted_at IS NULL)) ORDER BY CASE kind WHEN 'collect' THEN 0 ELSE 1 END,id").fetchall()
+        with self.store.db() as c:rows=c.execute("SELECT id,progress FROM runs WHERE kind IN ('collect','analyze','item_analysis','interpret','history_plan','history_search','journal_metrics','abstract_retrieval') AND status='interrupted' AND (kind NOT IN ('history_plan','history_search') OR EXISTS(SELECT 1 FROM histories h WHERE h.id=json_extract(runs.argument,'$.input') AND h.deleted_at IS NULL)) ORDER BY CASE kind WHEN 'collect' THEN 0 ELSE 1 END,id").fetchall()
         for row in rows:
             if json.loads(row['progress']).get('pause_requested'):
                 with self.store.db() as c:c.execute("UPDATE runs SET status='paused',error='paused_by_user' WHERE id=?",(row['id'],))
@@ -249,6 +252,7 @@ class Service:
                 result['analysis']=self._analyze_queue(job,payload)
             elif kind=='analyze':result=self._analyze_queue(job,payload)
             elif kind=='journal_metrics':result=self.journals.run(job,payload['settings'])
+            elif kind=='abstract_retrieval':result=self.abstracts.run(job,payload)
             elif kind=='history_plan':result=self.ai_call(job,lambda effective:self.history.plan(payload['input'],effective),payload['settings'])
             elif kind=='history_search':result=self.history.search(payload['input'],payload['settings'],job)
             elif kind=='interpret':result={'profile':self.ai_call(job,lambda effective:self.ai.interpret(payload['input'],settings=effective),payload['settings'])}
@@ -274,7 +278,7 @@ class Service:
                     final=self.store.job(job)
                     state='draft' if kind=='history_plan' and final['status']=='complete' else final['status']
                     self.history.update(payload['input'],status=state,error=final.get('error') or '')
-                if kind in ('collect','analyze','item_analysis'):
+                if kind in ('collect','analyze','item_analysis','abstract_retrieval'):
                     try:self.digest()
                     except Exception:pass
             finally:
@@ -359,16 +363,19 @@ class Service:
         if not active:raise AppError('research_not_applied')
         self._checkpoint(job,phase='analysis',model=settings['model'],reasoning_effort=settings.get('reasoning_effort','default'),profile_version=active['version'])
         for item in self.store.pending_items(active['version']):
-            with self.store.db() as c:c.execute("INSERT OR IGNORE INTO analysis_tasks(run_id,item_id,version_id,profile_version,updated_at) VALUES(?,?,?,?,?)",(job,item['id'],item['current_version'],active['version'],now()))
+            with self.store.db() as c:c.execute("INSERT INTO analysis_tasks(run_id,item_id,version_id,profile_version,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(run_id,item_id) DO UPDATE SET version_id=excluded.version_id,status='pending',error=NULL,updated_at=excluded.updated_at WHERE analysis_tasks.version_id<>excluded.version_id",(job,item['id'],item['current_version'],active['version'],now()))
         errors=[];error_lock=threading.Lock();error_state={'consecutive':0}
         with self.store.db() as c:tasks=[dict(r) for r in c.execute("SELECT * FROM analysis_tasks WHERE run_id=? AND status='pending' ORDER BY id",(job,))]
         def assess(task):
             self._check_pause(job)
+            self.abstracts.enrich(task['item_id'],job)
             item=self.store.item(task['item_id'],include_deleted=True)
             if item['deleted_at']:
                 with self.store.db() as c:c.execute("UPDATE analysis_tasks SET status='skipped',error='item_in_trash',updated_at=? WHERE id=?",(now(),task['id']))
                 return
             with self.store.db() as c:
+                task['version_id']=item['current_version']
+                c.execute('UPDATE analysis_tasks SET version_id=? WHERE id=?',(task['version_id'],task['id']))
                 already=c.execute('SELECT 1 FROM analyses WHERE item_id=? AND version_id=? AND profile_version=?',(task['item_id'],task['version_id'],task['profile_version'])).fetchone()
                 if already or item['ignored']:
                     c.execute('UPDATE analysis_tasks SET status=?,updated_at=? WHERE id=?',('completed' if already else 'skipped',now(),task['id']));return
@@ -405,7 +412,7 @@ class Service:
             existing=c.execute('SELECT item_ids FROM digests WHERE day=?',(day,)).fetchone();old=set(json.loads(existing[0]) if existing else [])
             candidates=[]
             for item in ranked:
-                if item['ignored'] or (item['analysis'] or {}).get('relevance')=='low':continue
+                if item['ignored'] or (item['analysis'] or {}).get('relevance') not in ('high','medium'):continue
                 delivered=c.execute('SELECT 1 FROM delivered WHERE item_id=? AND version_id=?',(item['id'],item['current_version'])).fetchone()
                 if item['id'] in old or not delivered:candidates.append(item)
             selected=candidates[:s['daily_digest_limit']];ids=[i['id'] for i in selected]
@@ -416,12 +423,36 @@ class Service:
     def scheduler(self):
         while not self.stop.is_set():
             errors=[]
-            for task in (self.schedule_tick,self.recover_interrupted,self.retry_tick,self.metrics_tick):
+            for task in (self.schedule_tick,self.recover_interrupted,self.retry_tick,self.metrics_tick,self.abstracts_tick):
                 try:task()
                 except Exception as exc:errors.append(exc.code if isinstance(exc,AppError) else type(exc).__name__)
             try:self.store.put('scheduler_status',{'checked_at':now(),'error':'; '.join(errors) or None})
             except Exception:pass
             self.stop.wait(20)
+
+    def abstracts_tick(self):
+        with self.guard:
+            if any(w['group'][0]=='abstract_retrieval' for w in self.workers.values()):return
+            with self.store.db() as c:
+                last=c.execute("SELECT status FROM runs WHERE kind='abstract_retrieval' ORDER BY id DESC LIMIT 1").fetchone()
+            # Manual pauses and failed jobs remain visible and resumable.
+            if last and last['status'] in ('paused','failed','interrupted','partial'):return
+            active=self.store.get('profile')['active']
+            history_pending=[hid for hid in self.abstracts.history_pending() if not any(w['group']==('history',hid) for w in self.workers.values())]
+            if self.abstracts.pending() or history_pending or self.abstracts.assessment_pending(active):
+                self.start_job('abstract_retrieval')
+
+    def refresh_abstracts(self):
+        with self.guard:
+            existing=next((job for job,w in self.workers.items() if w['group'][0]=='abstract_retrieval'),None)
+            if existing is not None:return {'job_id':existing,'already_running':True}
+            with self.store.db() as c:
+                last=c.execute("SELECT id,status FROM runs WHERE kind='abstract_retrieval' ORDER BY id DESC LIMIT 1").fetchone()
+            if last and last['status'] in ('paused','failed','interrupted','partial'):
+                return {'job_id':self.resume(last['id'])}
+            with self.store.db() as c:
+                c.execute("UPDATE abstract_lookups SET status='pending',retry_at=NULL WHERE item_id IN (SELECT id FROM items WHERE deleted_at IS NULL AND trim(abstract)='')")
+            return {'job_id':self.start_job('abstract_retrieval')}
 
     def retry_tick(self,current=None):
         if not self.store.settings()['auto_resume']:return
